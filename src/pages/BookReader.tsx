@@ -122,6 +122,8 @@ export default function BookReader() {
 
   const settings = useStore((state) => state.settings);
   const updateBook = useStore((state) => state.updateBook);
+  const updateSettings = useStore((state) => state.updateSettings);
+  const apiCallCount = useStore((state) => state.apiCallCount);
   const apiKey = settings.apiKey;
 
   const synthRef = useRef<SpeechSynthesis | null>(null);
@@ -983,7 +985,7 @@ export default function BookReader() {
           {/* API Counter */}
           <div className="hidden md:flex items-center gap-1 text-[10px] font-medium text-zinc-500 bg-zinc-100 px-2 py-1 rounded-md shrink-0 border border-zinc-200/50" title="Gemini API Calls">
             <Zap size={10} className="text-yellow-500" />
-            <span>{useStore((state) => state.apiCallCount)}</span>
+            <span>{apiCallCount}</span>
           </div>
 
           {/* TTS Controls */}
