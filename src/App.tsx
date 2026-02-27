@@ -9,6 +9,7 @@ import BookOrchestrator from './pages/BookOrchestrator';
 import Settings from './pages/Settings';
 import BookClub from './pages/BookClub';
 import Statistics from './pages/Statistics';
+import Vocabulary from './pages/Vocabulary';
 import { auth } from './lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { db } from './lib/db';
@@ -66,6 +67,7 @@ export default function App() {
           <Route path="club" element={<BookClub />} />
           <Route path="stats" element={<Statistics />} />
           <Route path="settings" element={<Settings />} />
+          <Route path="vocabulary" element={<Vocabulary />} />
         </Route>
         <Route
           path="/book/:id"

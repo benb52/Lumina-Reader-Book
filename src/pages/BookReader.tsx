@@ -58,6 +58,38 @@ const getSentences = (text: string) => {
   return text.split(/(?<=[.!?\n])\s+/).filter(s => s.trim().length > 0);
 };
 
+interface TtsChunk {
+  text: string;
+  sentences: string[];
+  startIndex: number;
+}
+
+const buildTtsChunks = (sentences: string[]): TtsChunk[] => {
+  const chunks: TtsChunk[] = [];
+  let currentText = '';
+  let currentSentences: string[] = [];
+  let startIndex = 0;
+
+  for (let i = 0; i < sentences.length; i++) {
+    const sentence = sentences[i];
+    currentText += sentence;
+    currentSentences.push(sentence);
+
+    // Group sentences into chunks of ~400 characters, or break at paragraph boundaries
+    if (currentText.length > 400 || i === sentences.length - 1 || sentence.includes('\n')) {
+      chunks.push({
+        text: currentText,
+        sentences: [...currentSentences],
+        startIndex: startIndex
+      });
+      currentText = '';
+      currentSentences = [];
+      startIndex = i + 1;
+    }
+  }
+  return chunks;
+};
+
 export default function BookReader() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -83,7 +115,7 @@ export default function BookReader() {
   const [currentSubtitle, setCurrentSubtitle] = useState('');
   const [pageTranslations, setPageTranslations] = useState<string[]>([]);
   const [isTranslatingSubtitle, setIsTranslatingSubtitle] = useState(false);
-  const [isSubtitleTranslationEnabled, setIsSubtitleTranslationEnabled] = useState(false);
+  const [batchTranslationStatus, setBatchTranslationStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [currentSentenceIndex, setCurrentSentenceIndex] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [geminiAudioData, setGeminiAudioData] = useState<{ url: string, sentences: string[] } | null>(null);
@@ -99,16 +131,16 @@ export default function BookReader() {
 
   // Refs to fix closure issues in async recursive functions
   const settingsRef = useRef(settings);
-  const isSubtitleTranslationEnabledRef = useRef(isSubtitleTranslationEnabled);
+  const isSubtitleTranslationEnabledRef = useRef(settings.isSubtitleTranslationEnabled);
   const apiKeyRef = useRef(apiKey);
   const isPlayingRef = useRef(isPlaying);
 
   useEffect(() => {
     settingsRef.current = settings;
-    isSubtitleTranslationEnabledRef.current = isSubtitleTranslationEnabled;
+    isSubtitleTranslationEnabledRef.current = settings.isSubtitleTranslationEnabled;
     apiKeyRef.current = apiKey;
     isPlayingRef.current = isPlaying;
-  }, [settings, isSubtitleTranslationEnabled, apiKey, isPlaying]);
+  }, [settings, apiKey, isPlaying]);
 
   useEffect(() => {
     if (id) {
@@ -261,8 +293,9 @@ export default function BookReader() {
 
   // Fetch translations for the whole page when page changes or subtitles are enabled
   useEffect(() => {
-    if (!isSubtitleTranslationEnabled || !apiKey) {
+    if (!settings.isSubtitleTranslationEnabled || !apiKey) {
       setPageTranslations([]);
+      setBatchTranslationStatus('idle');
       return;
     }
 
@@ -280,40 +313,71 @@ export default function BookReader() {
     if (sentences.length === 0) return;
 
     setIsTranslatingSubtitle(true);
+    setBatchTranslationStatus('loading');
     translateSentencesBatch(sentences, settings.subtitleLanguage, apiKey)
       .then(translated => {
         setPageTranslations(translated);
+        setBatchTranslationStatus(translated.length === sentences.length ? 'success' : 'error');
       })
       .catch(err => {
         console.error("Batch translation error", err);
+        const errStr = err ? (err.message || err.toString() || JSON.stringify(err)) : '';
+        if (errStr.includes('400') || errStr.includes('API_KEY_INVALID') || errStr.includes('API key not valid')) {
+          setErrorMessage("Invalid Gemini API Key for translation. Please check your settings.");
+        }
         setPageTranslations([]);
+        setBatchTranslationStatus('error');
       })
       .finally(() => {
         setIsTranslatingSubtitle(false);
       });
-  }, [currentPage, isSubtitleTranslationEnabled, apiKey, settings.subtitleLanguage, pages]);
+  }, [currentPage, settings.isSubtitleTranslationEnabled, apiKey, settings.subtitleLanguage, pages]);
 
   // Update current subtitle based on sentence index
   useEffect(() => {
-    if (!isSubtitleTranslationEnabled || !isPlaying || currentSentenceIndex === null) {
+    if (!settings.isSubtitleTranslationEnabled || !isPlaying || currentSentenceIndex === null) {
       setCurrentSubtitle('');
       return;
     }
 
-    if (pageTranslations && pageTranslations.length > currentSentenceIndex && pageTranslations[currentSentenceIndex]) {
-      setCurrentSubtitle(pageTranslations[currentSentenceIndex]);
-    } else {
-      // Fallback if translation isn't ready or failed
-      const cleanText = pages[currentPage]
-        ?.replace(/<<PAGE:\d+>>/g, '')
-        .replace(/<<BOLD_START>>/g, '')
-        .replace(/<<BOLD_END>>/g, '')
-        .replace(/<<UNDERLINE_START>>/g, '')
-        .replace(/<<UNDERLINE_END>>/g, '');
-      const sentences = getSentences(cleanText || '');
-      setCurrentSubtitle(sentences[currentSentenceIndex] || '');
+    const cleanText = pages[currentPage]
+      ?.replace(/<<PAGE:\d+>>/g, '')
+      .replace(/<<BOLD_START>>/g, '')
+      .replace(/<<BOLD_END>>/g, '')
+      .replace(/<<UNDERLINE_START>>/g, '')
+      .replace(/<<UNDERLINE_END>>/g, '');
+    const sentences = getSentences(cleanText || '');
+    const currentSentence = sentences[currentSentenceIndex];
+
+    if (!currentSentence) {
+      setCurrentSubtitle('');
+      return;
     }
-  }, [currentSentenceIndex, isPlaying, isSubtitleTranslationEnabled, pageTranslations, currentPage, pages]);
+
+    if (batchTranslationStatus === 'success' && pageTranslations[currentSentenceIndex]) {
+      setCurrentSubtitle(pageTranslations[currentSentenceIndex]);
+    } else if (batchTranslationStatus === 'error') {
+      // Fallback to translating sentence-by-sentence if batch failed or mismatched (out of sync)
+      if (apiKey) {
+        setIsTranslatingSubtitle(true);
+        translateText(currentSentence, settings.subtitleLanguage, apiKey)
+          .then(trans => {
+            if (isPlayingRef.current) setCurrentSubtitle(trans);
+          })
+          .catch(() => {
+            if (isPlayingRef.current) setCurrentSubtitle(currentSentence);
+          })
+          .finally(() => {
+            if (isPlayingRef.current) setIsTranslatingSubtitle(false);
+          });
+      } else {
+        setCurrentSubtitle(currentSentence);
+      }
+    } else {
+      // Still loading batch
+      setCurrentSubtitle(currentSentence);
+    }
+  }, [currentSentenceIndex, isPlaying, settings.isSubtitleTranslationEnabled, pageTranslations, batchTranslationStatus, currentPage, pages, apiKey, settings.subtitleLanguage]);
 
   const startTTS = async (startIndex = 0) => {
     if (!pages[currentPage]) return;
@@ -353,99 +417,128 @@ export default function BookReader() {
     }
   };
 
-  const playWithGeminiTTS = (sentences: string[], startIdx: number) => {
-    let currentIdx = startIdx;
+  const playWithGeminiTTS = async (sentences: string[], startGlobalIdx: number) => {
+    const chunks = buildTtsChunks(sentences);
+    
+    let currentChunkIdx = chunks.findIndex(c => 
+      startGlobalIdx >= c.startIndex && startGlobalIdx < c.startIndex + c.sentences.length
+    );
+    if (currentChunkIdx === -1) currentChunkIdx = 0;
+
     let nextAudioBase64: string | null = null;
     let isRateLimited = false;
+    let localStartIdx = startGlobalIdx > chunks[currentChunkIdx].startIndex ? startGlobalIdx - chunks[currentChunkIdx].startIndex : 0;
 
-    const fetchAudio = async (idx: number) => {
-      if (idx >= sentences.length || isRateLimited) return null;
+    const fetchAudio = async (chunkIdx: number) => {
+      if (chunkIdx >= chunks.length || isRateLimited) return null;
       try {
-        return await generateSpeech(sentences[idx].trim(), settingsRef.current.geminiVoice, apiKeyRef.current);
+        return await generateSpeech(chunks[chunkIdx].text, settingsRef.current.geminiVoice, apiKeyRef.current);
       } catch (e: any) {
         console.error("Failed to fetch audio", e);
         const errStr = e ? (e.message || e.toString() || JSON.stringify(e)) : '';
         if (errStr.includes('429') || errStr.includes('RESOURCE_EXHAUSTED') || errStr.includes('quota')) {
            isRateLimited = true;
-           setErrorMessage("Gemini API rate limit exceeded (15 requests/min on free tier). Falling back to browser voice.");
+           setErrorMessage("Gemini API rate limit exceeded. Falling back to browser voice.");
+        } else if (errStr.includes('400') || errStr.includes('API_KEY_INVALID') || errStr.includes('API key not valid')) {
+           isRateLimited = true;
+           setErrorMessage("Invalid Gemini API Key. Please check your settings. Falling back to browser voice.");
         }
         return null;
       }
     };
 
-    const playNext = async () => {
+    const playNextChunk = async () => {
       if (!isPlayingRef.current) return;
       
-      if (currentIdx >= sentences.length) {
+      if (currentChunkIdx >= chunks.length) {
         setIsPlaying(false);
         setCurrentSubtitle('');
         setCurrentSentenceIndex(null);
         if (settingsRef.current.autoTurnPage && currentPage < pages.length - 1) {
-            handleNextPage();
-            setTimeout(() => {
-              startTTS(0);
-            }, 500);
+          handleNextPage();
+          setTimeout(() => {
+            startTTS(0);
+          }, 500);
         }
         return;
       }
 
-      const sentence = sentences[currentIdx].trim();
-      if (!sentence) {
-        currentIdx++;
-        playNext();
-        return;
-      }
-
+      const chunk = chunks[currentChunkIdx];
       let base64Audio = nextAudioBase64;
+      
       if (!base64Audio) {
         setIsTtsLoading(true);
-        base64Audio = await fetchAudio(currentIdx);
+        base64Audio = await fetchAudio(currentChunkIdx);
         setIsTtsLoading(false);
       }
-      
-      // Start fetching next audio in background if not rate limited
+
+      // Fetch next in background
       nextAudioBase64 = null;
-      if (currentIdx + 1 < sentences.length && !isRateLimited) {
-        fetchAudio(currentIdx + 1).then(audio => {
+      if (currentChunkIdx + 1 < chunks.length && !isRateLimited) {
+        fetchAudio(currentChunkIdx + 1).then(audio => {
           nextAudioBase64 = audio;
         });
       }
 
       if (!isPlayingRef.current) return;
 
-      // UPDATE INDEX HERE, right before playing so highlight syncs perfectly
-      setCurrentSentenceIndex(currentIdx);
-
       if (base64Audio && audioRef.current) {
         const wavUrl = pcmBase64ToWavBase64(base64Audio, 24000);
         audioRef.current.src = wavUrl;
         audioRef.current.playbackRate = settingsRef.current.ttsSpeed;
-        
+
+        let searchIdx = 0;
+        const sentenceRanges = chunk.sentences.map(s => {
+          const start = chunk.text.indexOf(s, searchIdx);
+          const end = start + s.length;
+          searchIdx = end;
+          return { start, end };
+        });
+
+        audioRef.current.ontimeupdate = () => {
+          if (!isPlayingRef.current || !audioRef.current) return;
+          const duration = audioRef.current.duration;
+          if (!duration || isNaN(duration) || duration === Infinity) return;
+          
+          const progress = audioRef.current.currentTime / duration;
+          const targetChar = progress * chunk.text.length;
+          
+          let activeLocalIdx = sentenceRanges.findIndex(r => targetChar >= r.start && targetChar <= r.end);
+          if (activeLocalIdx === -1) {
+             const closest = sentenceRanges.findIndex(r => targetChar < r.start);
+             activeLocalIdx = closest > 0 ? closest - 1 : (closest === 0 ? 0 : chunk.sentences.length - 1);
+          }
+          
+          const activeGlobalIdx = chunk.startIndex + activeLocalIdx;
+          setCurrentSentenceIndex((prev) => prev !== activeGlobalIdx ? activeGlobalIdx : prev);
+        };
+
         audioRef.current.onended = () => {
           if (!isPlayingRef.current) return;
-          currentIdx++;
-          playNext();
+          currentChunkIdx++;
+          localStartIdx = 0; // Reset for subsequent chunks
+          playNextChunk();
         };
-        
-        audioRef.current.play().catch(e => {
-          console.error('Audio play error:', e);
-          currentIdx++;
-          playNext();
-        });
+
+        if (localStartIdx > 0) {
+           const startChar = sentenceRanges[localStartIdx].start;
+           const startProgress = startChar / chunk.text.length;
+           audioRef.current.onloadedmetadata = () => {
+              if (audioRef.current && !isNaN(audioRef.current.duration) && audioRef.current.duration !== Infinity) {
+                audioRef.current.currentTime = startProgress * audioRef.current.duration;
+                audioRef.current.play().catch(e => console.error(e));
+              }
+           };
+        } else {
+           audioRef.current.play().catch(e => console.error(e));
+        }
       } else {
-        // Fallback to browser TTS for this sentence if Gemini fails
-        const utterance = new SpeechSynthesisUtterance(sentence);
-        utterance.rate = settingsRef.current.ttsSpeed;
-        utterance.onend = () => {
-          if (!isPlayingRef.current) return;
-          currentIdx++;
-          playNext();
-        };
-        synthRef.current?.speak(utterance);
+        // Fallback to browser TTS for the rest of the page
+        playWithBrowserTTS(sentences, chunk.startIndex + localStartIdx);
       }
     };
 
-    playNext();
+    playNextChunk();
   };
 
   const playWithBrowserTTS = (sentences: string[], startIdx: number) => {
@@ -887,6 +980,12 @@ export default function BookReader() {
             </div>
           </div>
 
+          {/* API Counter */}
+          <div className="hidden md:flex items-center gap-1 text-[10px] font-medium text-zinc-500 bg-zinc-100 px-2 py-1 rounded-md shrink-0 border border-zinc-200/50" title="Gemini API Calls">
+            <Zap size={10} className="text-yellow-500" />
+            <span>{useStore((state) => state.apiCallCount)}</span>
+          </div>
+
           {/* TTS Controls */}
           <div className="flex items-center justify-center gap-1 shrink-0">
             <Button variant="ghost" size="icon" onClick={() => handleTextSelection('quote')} title="Save Quote" className="hidden sm:inline-flex h-7 w-7 rounded-full">
@@ -901,9 +1000,13 @@ export default function BookReader() {
             <Button 
               variant="ghost" 
               size="icon" 
-              onClick={() => setIsSubtitleTranslationEnabled(!isSubtitleTranslationEnabled)} 
+              onClick={() => {
+                const newValue = !settings.isSubtitleTranslationEnabled;
+                updateSettings({ isSubtitleTranslationEnabled: newValue });
+                db.saveSettings({ ...settings, isSubtitleTranslationEnabled: newValue });
+              }} 
               title={`Toggle ${settings.subtitleLanguage} Subtitles`} 
-              className={cn("h-7 w-7 rounded-full", isSubtitleTranslationEnabled ? "text-blue-500 bg-blue-50" : "")}
+              className={cn("h-7 w-7 rounded-full", settings.isSubtitleTranslationEnabled ? "text-blue-500 bg-blue-50" : "")}
             >
               <Captions size={14} />
             </Button>

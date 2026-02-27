@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { BookOpen, Settings, LogOut, Library as LibraryIcon, Users, BarChart3, Menu, X } from 'lucide-react';
+import { BookOpen, Settings, LogOut, Library as LibraryIcon, Users, BarChart3, Menu, X, BookA } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { cn } from '../lib/utils';
 import { auth } from '../lib/firebase';
@@ -22,6 +22,7 @@ export default function Layout() {
 
   const navItems = [
     { name: 'Library', path: '/', icon: LibraryIcon },
+    { name: 'Vocabulary', path: '/vocabulary', icon: BookA },
     { name: 'Book Club', path: '/club', icon: Users },
     { name: 'Statistics', path: '/stats', icon: BarChart3 },
     { name: 'Settings', path: '/settings', icon: Settings },

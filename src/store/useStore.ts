@@ -25,6 +25,15 @@ export interface Book {
   };
 }
 
+export interface VocabularyWord {
+  id: string;
+  word: string;
+  definition: string;
+  context: string;
+  bookId: string;
+  addedAt: number;
+}
+
 export interface AppSettings {
   theme: 'light' | 'dark';
   fontSize: number;
@@ -38,6 +47,7 @@ export interface AppSettings {
   geminiVoice: 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' | 'Aoede';
   subtitleLanguage: string;
   autoTurnPage: boolean;
+  isSubtitleTranslationEnabled: boolean;
 }
 
 interface AppState {
@@ -50,6 +60,12 @@ interface AppState {
   updateBook: (id: string, updates: Partial<Book>) => void;
   deleteBook: (id: string) => void;
   updateSettings: (updates: Partial<AppSettings>) => void;
+  apiCallCount: number;
+  incrementApiCallCount: () => void;
+  vocabulary: VocabularyWord[];
+  setVocabulary: (words: VocabularyWord[]) => void;
+  addVocabularyWord: (word: VocabularyWord) => void;
+  removeVocabularyWord: (id: string) => void;
 }
 
 export const useStore = create<AppState>()(
@@ -70,6 +86,7 @@ export const useStore = create<AppState>()(
         geminiVoice: 'Kore',
         subtitleLanguage: 'Hebrew',
         autoTurnPage: false,
+        isSubtitleTranslationEnabled: false,
       },
       login: (user) => set({ user }),
       logout: () => set({ user: null }),
@@ -82,6 +99,12 @@ export const useStore = create<AppState>()(
         set((state) => ({ books: state.books.filter((b) => b.id !== id) })),
       updateSettings: (updates) =>
         set((state) => ({ settings: { ...state.settings, ...updates } })),
+      apiCallCount: 0,
+      incrementApiCallCount: () => set((state) => ({ apiCallCount: state.apiCallCount + 1 })),
+      vocabulary: [],
+      setVocabulary: (words) => set({ vocabulary: words }),
+      addVocabularyWord: (word) => set((state) => ({ vocabulary: [word, ...state.vocabulary] })),
+      removeVocabularyWord: (id) => set((state) => ({ vocabulary: state.vocabulary.filter(w => w.id !== id) })),
     }),
     {
       name: 'lumina-storage',

@@ -1,5 +1,5 @@
 import { get, set, del, keys } from 'idb-keyval';
-import { Book, AppSettings } from '../store/useStore';
+import { Book, AppSettings, VocabularyWord } from '../store/useStore';
 import { db as firestore, auth } from './firebase';
 import { doc, setDoc, getDoc, deleteDoc, collection, getDocs } from 'firebase/firestore';
 
@@ -203,5 +203,44 @@ export const db = {
       }
     }
     return null;
+  },
+
+  async saveVocabularyWord(word: VocabularyWord) {
+    const userId = auth.currentUser?.uid;
+    if (!userId) return;
+
+    try {
+      await setDoc(doc(firestore, `users/${userId}/vocabulary`, word.id), word);
+    } catch (error) {
+      console.error("Error saving vocabulary word to Firebase:", error);
+    }
+  },
+
+  async getVocabulary(): Promise<VocabularyWord[]> {
+    const userId = auth.currentUser?.uid;
+    if (!userId) return [];
+
+    try {
+      const querySnapshot = await getDocs(collection(firestore, `users/${userId}/vocabulary`));
+      const words: VocabularyWord[] = [];
+      querySnapshot.forEach((doc) => {
+        words.push(doc.data() as VocabularyWord);
+      });
+      return words.sort((a, b) => b.addedAt - a.addedAt);
+    } catch (error) {
+      console.error("Error getting vocabulary from Firebase:", error);
+      return [];
+    }
+  },
+
+  async deleteVocabularyWord(id: string) {
+    const userId = auth.currentUser?.uid;
+    if (!userId) return;
+
+    try {
+      await deleteDoc(doc(firestore, `users/${userId}/vocabulary`, id));
+    } catch (error) {
+      console.error("Error deleting vocabulary word from Firebase:", error);
+    }
   }
 };

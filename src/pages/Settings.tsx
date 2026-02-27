@@ -57,7 +57,7 @@ export default function Settings() {
               <input
                 type="password"
                 value={localSettings.apiKey}
-                onChange={(e) => setLocalSettings({ ...localSettings, apiKey: e.target.value })}
+                onChange={(e) => setLocalSettings({ ...localSettings, apiKey: e.target.value.trim() })}
                 className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900"
                 placeholder="AIzaSy..."
               />
@@ -209,6 +209,26 @@ export default function Settings() {
                   className="sr-only peer" 
                   checked={localSettings.autoTurnPage}
                   onChange={(e) => setLocalSettings({ ...localSettings, autoTurnPage: e.target.checked })}
+                />
+                <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
+              </label>
+            </div>
+
+            <div className="flex items-center justify-between p-4 border border-zinc-200 rounded-xl bg-zinc-50/50">
+              <div>
+                <label className="block text-sm font-medium text-zinc-900">
+                  Enable Subtitles
+                </label>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  Show translated subtitles while reading.
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input 
+                  type="checkbox" 
+                  className="sr-only peer" 
+                  checked={localSettings.isSubtitleTranslationEnabled}
+                  onChange={(e) => setLocalSettings({ ...localSettings, isSubtitleTranslationEnabled: e.target.checked })}
                 />
                 <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
               </label>

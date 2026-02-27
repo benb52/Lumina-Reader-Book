@@ -81,7 +81,7 @@ export default function Login() {
       if (err.code === 'auth/popup-closed-by-user') {
         setError('ההתחברות בוטלה על ידי המשתמש.');
       } else if (err.code === 'auth/unauthorized-domain') {
-        setError('שגיאה: הדומיין הנוכחי אינו מורשה ב-Firebase. יש להוסיף את הדומיין הזה לרשימת ה-Authorized domains ב-Firebase Console תחת Authentication -> Settings.');
+        setError('שגיאה: הדומיין הנוכחי אינו מורשה ב-Firebase. יש להוסיף את הדומיינים הבאים לרשימת ה-Authorized domains ב-Firebase Console תחת Authentication -> Settings: \n1. ais-dev-afaczz7qiyvjl4smbm6qyc-21130721155.europe-west3.run.app\n2. ais-pre-afaczz7qiyvjl4smbm6qyc-21130721155.europe-west3.run.app');
       } else {
         setError('התחברות באמצעות Google נכשלה: ' + err.message);
       }
