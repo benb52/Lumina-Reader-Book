@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { BookOpen, Settings, LogOut, Library as LibraryIcon, Users, BarChart3, Menu, X, BookA } from 'lucide-react';
+import { BookOpen, Settings, LogOut, Library as LibraryIcon, Users, BarChart3, Menu, X, BookA, Shield } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { cn } from '../lib/utils';
 import { auth } from '../lib/firebase';
@@ -9,6 +9,7 @@ import { Button } from './ui/Button';
 export default function Layout() {
   const location = useLocation();
   const logout = useStore((state) => state.logout);
+  const user = useStore((state) => state.user);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const handleLogout = async () => {
@@ -23,21 +24,24 @@ export default function Layout() {
   const navItems = [
     { name: 'Library', path: '/', icon: LibraryIcon },
     { name: 'Vocabulary', path: '/vocabulary', icon: BookA },
-    { name: 'Book Club', path: '/club', icon: Users },
     { name: 'Statistics', path: '/stats', icon: BarChart3 },
     { name: 'Settings', path: '/settings', icon: Settings },
   ];
+
+  if (user?.email === 'shakedbenb@gmail.com') {
+    navItems.push({ name: 'Admin', path: '/admin', icon: Shield });
+  }
 
   return (
     <div className="flex flex-col h-screen bg-zinc-50 text-zinc-900 font-sans overflow-hidden">
       {/* Top Navigation Bar */}
       <header className="h-16 bg-white border-b border-zinc-200 flex items-center justify-between px-4 md:px-8 shrink-0 z-20">
-        <div className="flex items-center gap-3">
+        <Link to="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
           <div className="bg-zinc-900 text-white p-1.5 rounded-lg">
             <BookOpen size={20} />
           </div>
           <h1 className="text-lg font-semibold tracking-tight hidden sm:block">Lumina</h1>
-        </div>
+        </Link>
 
         {/* Desktop Navigation */}
         <nav className="hidden md:flex items-center gap-1">

@@ -16,6 +16,9 @@ export default function BookOrchestrator() {
   const [pageToDelete, setPageToDelete] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [bookTitle, setBookTitle] = useState<string>('');
+  const [bookAuthor, setBookAuthor] = useState<string>('');
+  const [bookCoverUrl, setBookCoverUrl] = useState<string>('');
   const [bookLanguage, setBookLanguage] = useState<string>('');
 
   useEffect(() => {
@@ -28,6 +31,9 @@ export default function BookOrchestrator() {
     const b = await db.getBook(bookId);
     if (b) {
       setBook(b);
+      setBookTitle(b.title || '');
+      setBookAuthor(b.author || '');
+      setBookCoverUrl(b.coverUrl || '');
       setBookLanguage(b.language || '');
       // Split content by our marker
       const pgs = b.content.split('<<LUMINA_PAGE_BREAK>>').filter(p => p.trim() !== '');
@@ -108,12 +114,18 @@ export default function BookOrchestrator() {
       
       const updatedBook = { 
         ...book, 
+        title: bookTitle,
+        author: bookAuthor,
+        coverUrl: bookCoverUrl,
         content,
         totalPages: pages.length,
         language: bookLanguage
       };
       await db.saveBook(updatedBook);
       updateBook(book.id, { 
+        title: bookTitle,
+        author: bookAuthor,
+        coverUrl: bookCoverUrl,
         content,
         totalPages: updatedBook.totalPages,
         language: bookLanguage
@@ -132,7 +144,7 @@ export default function BookOrchestrator() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-zinc-50 relative">
+    <div className="flex flex-col min-h-screen bg-zinc-50 relative">
       {errorMessage && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 p-4 bg-red-50 text-red-700 rounded-xl border border-red-200 flex justify-between items-center shadow-lg min-w-[300px]">
           <span>{errorMessage}</span>
@@ -187,8 +199,44 @@ export default function BookOrchestrator() {
         </div>
       </header>
 
-      <div className="flex-1 overflow-hidden p-4 md:p-6 max-w-5xl mx-auto w-full flex flex-col">
-        <div className="bg-white rounded-2xl shadow-sm border border-zinc-200 flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 p-4 md:p-6 max-w-5xl mx-auto w-full flex flex-col gap-4">
+        <div className="bg-white rounded-2xl shadow-sm border border-zinc-200 p-4 shrink-0">
+          <h2 className="text-sm font-semibold text-zinc-900 mb-3">Book Details</h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-zinc-700">Title</label>
+              <input 
+                type="text" 
+                value={bookTitle} 
+                onChange={(e) => setBookTitle(e.target.value)}
+                className="px-3 py-2 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-shadow"
+                placeholder="Book Title"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-zinc-700">Author</label>
+              <input 
+                type="text" 
+                value={bookAuthor} 
+                onChange={(e) => setBookAuthor(e.target.value)}
+                className="px-3 py-2 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-shadow"
+                placeholder="Author Name"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-zinc-700">Cover Image URL</label>
+              <input 
+                type="text" 
+                value={bookCoverUrl} 
+                onChange={(e) => setBookCoverUrl(e.target.value)}
+                placeholder="https://example.com/cover.jpg"
+                className="px-3 py-2 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-shadow"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl shadow-sm border border-zinc-200 flex-1 flex flex-col min-h-[70vh]">
           <div className="p-3 bg-zinc-50 border-b border-zinc-200 flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2">
               <Button variant="ghost" size="sm" onClick={() => handlePageChange(currentPageIndex - 1)} disabled={currentPageIndex === 0}>
@@ -216,11 +264,16 @@ export default function BookOrchestrator() {
               </Button>
             </div>
           </div>
+          <div className="px-4 pt-2 pb-0">
+            <p className="text-[11px] text-zinc-500 font-medium">
+              Note: Formatting tags like &lt;&lt;BOLD_START&gt;&gt; will be rendered visually when reading the book.
+            </p>
+          </div>
           <textarea
             id="page-editor"
             value={pages[currentPageIndex] || ''}
             onChange={(e) => handleContentChange(e.target.value)}
-            className="flex-1 w-full p-4 md:p-6 resize-none focus:outline-none focus:ring-0 font-mono text-xs md:text-sm leading-relaxed text-zinc-800"
+            className="flex-1 w-full p-4 md:p-6 resize-y min-h-[60vh] focus:outline-none focus:ring-0 font-mono text-sm leading-relaxed text-zinc-800"
             spellCheck={false}
             placeholder="Enter page content here..."
           />

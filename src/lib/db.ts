@@ -1,7 +1,7 @@
 import { get, set, del, keys } from 'idb-keyval';
 import { Book, AppSettings, VocabularyWord } from '../store/useStore';
 import { db as firestore, auth } from './firebase';
-import { doc, setDoc, getDoc, deleteDoc, collection, getDocs } from 'firebase/firestore';
+import { doc, setDoc, getDoc, deleteDoc, collection, getDocs, query, where } from 'firebase/firestore';
 
 export interface Quote {
   id: string;
@@ -11,6 +11,102 @@ export interface Quote {
 }
 
 export const db = {
+  async updateUserMetadata(user: { uid: string; email: string; name: string }) {
+    try {
+      await setDoc(doc(firestore, 'users', user.uid), {
+        uid: user.uid,
+        email: user.email,
+        name: user.name,
+        lastLogin: Date.now()
+      }, { merge: true });
+    } catch (error) {
+      console.error("Error updating user metadata:", error);
+    }
+  },
+
+  async getAllUsers() {
+    try {
+      const querySnapshot = await getDocs(collection(firestore, 'users'));
+      const users: any[] = [];
+      querySnapshot.forEach((doc) => {
+        users.push(doc.data());
+      });
+      return users;
+    } catch (error: any) {
+      if (error.code !== 'permission-denied') {
+        console.error("Error getting all users:", error);
+      }
+      throw error;
+    }
+  },
+
+  async getUserBooksCount(userId: string) {
+    try {
+      const querySnapshot = await getDocs(collection(firestore, `users/${userId}/books`));
+      return querySnapshot.size;
+    } catch (error: any) {
+      if (error.code !== 'permission-denied') {
+        console.error("Error getting user books count:", error);
+      }
+      throw error;
+    }
+  },
+
+  async shareBook(book: Book, targetEmail: string) {
+    const senderId = auth.currentUser?.uid;
+    const senderEmail = auth.currentUser?.email;
+    if (!senderId || !senderEmail) throw new Error("Not authenticated");
+
+    if (targetEmail.toLowerCase() === senderEmail.toLowerCase()) {
+      throw new Error("You cannot share a book with yourself.");
+    }
+
+    const shareId = `${senderId}_${book.id}_${Date.now()}`;
+    const sharedBookData = {
+      id: shareId,
+      book: book,
+      senderId: senderId,
+      senderEmail: senderEmail,
+      senderName: auth.currentUser?.displayName || senderEmail.split('@')[0],
+      targetEmail: targetEmail.toLowerCase(),
+      sentAt: Date.now(),
+      status: 'pending'
+    };
+
+    await setDoc(doc(firestore, 'shared_books', shareId), sharedBookData);
+  },
+
+  async getReceivedBooks() {
+    const userEmail = auth.currentUser?.email;
+    if (!userEmail) return [];
+
+    try {
+      const q = query(collection(firestore, 'shared_books'), where('targetEmail', '==', userEmail.toLowerCase()));
+      const querySnapshot = await getDocs(q);
+      const receivedBooks: any[] = [];
+      querySnapshot.forEach((doc) => {
+        receivedBooks.push(doc.data());
+      });
+      return receivedBooks.sort((a, b) => b.sentAt - a.sentAt);
+    } catch (error: any) {
+      if (error.code !== 'permission-denied') {
+        console.error("Error getting received books:", error);
+      }
+      throw error;
+    }
+  },
+
+  async deleteReceivedBook(shareId: string) {
+    try {
+      await deleteDoc(doc(firestore, 'shared_books', shareId));
+    } catch (error: any) {
+      if (error.code !== 'permission-denied') {
+        console.error("Error deleting received book:", error);
+      }
+      throw error;
+    }
+  },
+
   async saveBook(book: Book) {
     const userId = auth.currentUser?.uid;
     if (!userId) return;

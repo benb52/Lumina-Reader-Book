@@ -119,6 +119,7 @@ export default function BookReader() {
   const [currentSentenceIndex, setCurrentSentenceIndex] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [geminiAudioData, setGeminiAudioData] = useState<{ url: string, sentences: string[] } | null>(null);
+  const [isTurningPage, setIsTurningPage] = useState(false);
 
   const settings = useStore((state) => state.settings);
   const updateBook = useStore((state) => state.updateBook);
@@ -136,13 +137,19 @@ export default function BookReader() {
   const isSubtitleTranslationEnabledRef = useRef(settings.isSubtitleTranslationEnabled);
   const apiKeyRef = useRef(apiKey);
   const isPlayingRef = useRef(isPlaying);
+  const currentPageRef = useRef(currentPage);
+  const pagesRef = useRef(pages);
+  const isTurningPageRef = useRef(isTurningPage);
 
   useEffect(() => {
     settingsRef.current = settings;
     isSubtitleTranslationEnabledRef.current = settings.isSubtitleTranslationEnabled;
     apiKeyRef.current = apiKey;
     isPlayingRef.current = isPlaying;
-  }, [settings, apiKey, isPlaying]);
+    currentPageRef.current = currentPage;
+    pagesRef.current = pages;
+    isTurningPageRef.current = isTurningPage;
+  }, [settings, apiKey, isPlaying, currentPage, pages, isTurningPage]);
 
   useEffect(() => {
     if (id) {
@@ -382,7 +389,7 @@ export default function BookReader() {
   }, [currentSentenceIndex, isPlaying, settings.isSubtitleTranslationEnabled, pageTranslations, batchTranslationStatus, currentPage, pages, apiKey, settings.subtitleLanguage]);
 
   const startTTS = async (startIndex = 0) => {
-    if (!pages[currentPage]) return;
+    if (!pagesRef.current[currentPageRef.current]) return;
     
     if (settingsRef.current.ttsProvider === 'browser' && synthRef.current) {
       synthRef.current.cancel();
@@ -392,7 +399,7 @@ export default function BookReader() {
     }
     
     // Clean up markers for reading
-    const cleanText = pages[currentPage]
+    const cleanText = pagesRef.current[currentPageRef.current]
       .replace(/<<PAGE:\d+>>/g, '')
       .replace(/<<BOLD_START>>/g, '')
       .replace(/<<BOLD_END>>/g, '')
@@ -453,14 +460,19 @@ export default function BookReader() {
       if (!isPlayingRef.current) return;
       
       if (currentChunkIdx >= chunks.length) {
-        setIsPlaying(false);
         setCurrentSubtitle('');
         setCurrentSentenceIndex(null);
-        if (settingsRef.current.autoTurnPage && currentPage < pages.length - 1) {
-          handleNextPage();
+        if (settingsRef.current.autoTurnPage && currentPageRef.current < pagesRef.current.length - 1) {
+          setIsTurningPage(true);
           setTimeout(() => {
-            startTTS(0);
-          }, 500);
+            handleNextPage();
+            setTimeout(() => {
+              setIsTurningPage(false);
+              startTTS(0);
+            }, 600);
+          }, 400);
+        } else {
+          setIsPlaying(false);
         }
         return;
       }
@@ -550,9 +562,20 @@ export default function BookReader() {
       if (!isPlayingRef.current) return;
       
       if (currentIdx >= sentences.length) {
-        setIsPlaying(false);
-        setCurrentSubtitle('');
-        setCurrentSentenceIndex(null);
+        if (settingsRef.current.autoTurnPage && currentPageRef.current < pagesRef.current.length - 1) {
+          setIsTurningPage(true);
+          setTimeout(() => {
+            handleNextPage();
+            setTimeout(() => {
+              setIsTurningPage(false);
+              startTTS(0);
+            }, 600);
+          }, 400);
+        } else {
+          setIsPlaying(false);
+          setCurrentSubtitle('');
+          setCurrentSentenceIndex(null);
+        }
         return;
       }
 
@@ -586,11 +609,21 @@ export default function BookReader() {
       utterance.onend = () => {
         if (!isPlayingRef.current) return;
         currentIdx++;
-        if (currentIdx >= sentences.length && settingsRef.current.autoTurnPage && currentPage < pages.length - 1) {
-            handleNextPage();
-            setTimeout(() => {
-              startTTS(0);
-            }, 500);
+        if (currentIdx >= sentences.length) {
+            if (settingsRef.current.autoTurnPage && currentPageRef.current < pagesRef.current.length - 1) {
+                setIsTurningPage(true);
+                setTimeout(() => {
+                  handleNextPage();
+                  setTimeout(() => {
+                    setIsTurningPage(false);
+                    startTTS(0);
+                  }, 600);
+                }, 400);
+            } else {
+                setIsPlaying(false);
+                setCurrentSubtitle('');
+                setCurrentSentenceIndex(null);
+            }
         } else {
             playNext();
         }
@@ -698,11 +731,10 @@ export default function BookReader() {
         if (part.startsWith('<<PAGE:')) return null;
         if (part === '\n') return <br key={i} />;
         
-        let className = '';
-        if (isBold) className += 'font-bold text-zinc-900 ';
-        if (isUnderline) className += 'underline decoration-zinc-400 underline-offset-4 ';
-
-        return className ? <span key={i} className={className.trim()}>{part}</span> : <span key={i}>{part}</span>;
+        if (isBold && isUnderline) return <strong key={i} className="text-zinc-900"><u>{part}</u></strong>;
+        if (isBold) return <strong key={i} className="text-zinc-900">{part}</strong>;
+        if (isUnderline) return <u key={i} className="decoration-zinc-400 underline-offset-4">{part}</u>;
+        return <span key={i}>{part}</span>;
       });
       
       return { nodes, finalBold: isBold, finalUnderline: isUnderline };
@@ -838,7 +870,7 @@ export default function BookReader() {
         <div 
           ref={contentRef}
           className={cn(
-            "flex-1 overflow-y-auto px-4 py-6 md:px-12 lg:px-24 scroll-smooth",
+            "flex-1 overflow-y-auto px-4 py-6 md:px-12 lg:px-24 scroll-smooth relative",
             isPlaying && currentSubtitle ? "pb-64 md:pb-80" : "pb-32"
           )}
           onClick={(e) => {
@@ -852,9 +884,18 @@ export default function BookReader() {
             }
           }}
         >
+          {isTurningPage && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/60 backdrop-blur-[2px] transition-all duration-300">
+              <div className="flex flex-col items-center gap-3 bg-white px-6 py-4 rounded-2xl shadow-lg border border-zinc-100">
+                <div className="w-8 h-8 border-4 border-zinc-200 border-t-zinc-900 rounded-full animate-spin" />
+                <span className="text-sm font-medium text-zinc-600">Turning page...</span>
+              </div>
+            </div>
+          )}
           <div 
             className={cn(
-              "max-w-4xl mx-auto prose prose-zinc",
+              "max-w-4xl mx-auto prose prose-zinc transition-opacity duration-300",
+              isTurningPage ? "opacity-30" : "opacity-100",
               settings.fontFamily === 'serif' ? 'font-serif' : settings.fontFamily === 'mono' ? 'font-mono' : 'font-sans'
             )}
             style={{ fontSize: `${settings.fontSize}px`, lineHeight: 1.8 }}

@@ -7,9 +7,9 @@ import Library from './pages/Library';
 import BookReader from './pages/BookReader';
 import BookOrchestrator from './pages/BookOrchestrator';
 import Settings from './pages/Settings';
-import BookClub from './pages/BookClub';
 import Statistics from './pages/Statistics';
 import Vocabulary from './pages/Vocabulary';
+import AdminDashboard from './pages/AdminDashboard';
 import { auth } from './lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { db } from './lib/db';
@@ -31,7 +31,9 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        login({ uid: user.uid, email: user.email || '', name: user.email?.split('@')[0] || 'User' });
+        const userData = { uid: user.uid, email: user.email || '', name: user.email?.split('@')[0] || 'User' };
+        login(userData);
+        db.updateUserMetadata(userData);
         // Load settings from Firebase
         const userSettings = await db.getSettings();
         if (userSettings) {
@@ -64,10 +66,10 @@ export default function App() {
         >
           <Route index element={<Library />} />
           <Route path="edit/:id" element={<BookOrchestrator />} />
-          <Route path="club" element={<BookClub />} />
           <Route path="stats" element={<Statistics />} />
           <Route path="settings" element={<Settings />} />
           <Route path="vocabulary" element={<Vocabulary />} />
+          <Route path="admin" element={<AdminDashboard />} />
         </Route>
         <Route
           path="/book/:id"
