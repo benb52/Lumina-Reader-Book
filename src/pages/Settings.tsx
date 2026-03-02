@@ -1,23 +1,40 @@
 import { useState, useEffect } from 'react';
 import { useStore } from '../store/useStore';
 import { Button } from '../components/ui/Button';
-import { Save, Key, Volume2, Target } from 'lucide-react';
+import { Save, Key, Volume2, Target, User as UserIcon, Eye, EyeOff } from 'lucide-react';
 import { db } from '../lib/db';
 
 export default function Settings() {
   const settings = useStore((state) => state.settings);
   const updateSettings = useStore((state) => state.updateSettings);
+  const user = useStore((state) => state.user);
+  const login = useStore((state) => state.login);
 
   const [localSettings, setLocalSettings] = useState(settings);
+  const [localName, setLocalName] = useState(user?.name || '');
   const [isSaved, setIsSaved] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
 
   useEffect(() => {
     setLocalSettings(settings);
   }, [settings]);
 
+  useEffect(() => {
+    if (user) {
+      setLocalName(user.name);
+    }
+  }, [user]);
+
   const handleSave = async () => {
     updateSettings(localSettings);
     await db.saveSettings(localSettings);
+    
+    if (user && localName !== user.name) {
+      const updatedUser = { ...user, name: localName };
+      login(updatedUser);
+      await db.updateUserMetadata(updatedUser);
+    }
+
     setIsSaved(true);
     setTimeout(() => setIsSaved(false), 2000);
   };
@@ -30,6 +47,45 @@ export default function Settings() {
       </div>
 
       <div className="space-y-8">
+        {/* User Profile */}
+        <section className="bg-white p-6 rounded-3xl border border-zinc-200 shadow-sm">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="bg-purple-50 text-purple-600 p-2 rounded-xl">
+              <UserIcon size={20} />
+            </div>
+            <h2 className="text-xl font-semibold text-zinc-900">User Profile</h2>
+          </div>
+          
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 mb-1">
+                Display Name
+              </label>
+              <input
+                type="text"
+                value={localName}
+                onChange={(e) => setLocalName(e.target.value)}
+                className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                placeholder="Your Name"
+              />
+              <p className="text-xs text-zinc-500 mt-2">
+                This name will be displayed in the app and when you share books with others.
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 mb-1">
+                Email Address
+              </label>
+              <input
+                type="email"
+                value={user?.email || ''}
+                disabled
+                className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 bg-zinc-50 text-zinc-500 cursor-not-allowed"
+              />
+            </div>
+          </div>
+        </section>
+
         {/* API Settings */}
         <section className="bg-white p-6 rounded-3xl border border-zinc-200 shadow-sm">
           <div className="flex items-center gap-3 mb-6">
@@ -54,15 +110,24 @@ export default function Settings() {
                   Get an API key here
                 </a>
               </div>
-              <input
-                type="password"
-                value={localSettings.apiKey}
-                onChange={(e) => setLocalSettings({ ...localSettings, apiKey: e.target.value.trim() })}
-                className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900"
-                placeholder="AIzaSy..."
-              />
+              <div className="relative">
+                <input
+                  type={showApiKey ? "text" : "password"}
+                  value={localSettings.apiKey}
+                  onChange={(e) => setLocalSettings({ ...localSettings, apiKey: e.target.value.trim() })}
+                  className="w-full px-4 py-2.5 pr-12 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                  placeholder="AIzaSy..."
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600"
+                >
+                  {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
               <p className="text-xs text-zinc-500 mt-2">
-                Required for AI analysis, translation, and definitions. Your key is stored locally in your browser.
+                Required for AI analysis, translation, and definitions. Your key is stored securely in your personal account and cannot be accessed by other users.
               </p>
             </div>
           </div>

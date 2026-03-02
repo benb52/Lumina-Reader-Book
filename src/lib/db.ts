@@ -11,14 +11,38 @@ export interface Quote {
 }
 
 export const db = {
-  async updateUserMetadata(user: { uid: string; email: string; name: string }) {
+  async getUserMetadata(userId: string) {
     try {
-      await setDoc(doc(firestore, 'users', user.uid), {
+      const docRef = doc(firestore, 'users', userId);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        return docSnap.data();
+      }
+      return null;
+    } catch (error) {
+      console.error("Error getting user metadata:", error);
+      return null;
+    }
+  },
+
+  async updateUserMetadata(user: { uid: string; email: string; name?: string }) {
+    try {
+      const userRef = doc(firestore, 'users', user.uid);
+      const userDoc = await getDoc(userRef);
+      
+      const updateData: any = {
         uid: user.uid,
         email: user.email,
-        name: user.name,
         lastLogin: Date.now()
-      }, { merge: true });
+      };
+
+      if (!userDoc.exists() || !userDoc.data().name) {
+        updateData.name = user.name || user.email.split('@')[0];
+      } else if (user.name && user.name !== user.email.split('@')[0]) {
+         updateData.name = user.name;
+      }
+
+      await setDoc(userRef, updateData, { merge: true });
     } catch (error) {
       console.error("Error updating user metadata:", error);
     }

@@ -246,13 +246,33 @@ export default function Library() {
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {receivedBooks.map((rb) => (
-              <div key={rb.id} className="bg-white border border-zinc-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3">
-                <div>
-                  <h3 className="font-semibold text-zinc-900 line-clamp-1">{rb.book.title}</h3>
-                  <p className="text-sm text-zinc-500">From: {rb.senderName} ({rb.senderEmail})</p>
-                  <p className="text-xs text-zinc-400 mt-1">{new Date(rb.sentAt).toLocaleDateString()}</p>
+              <div key={rb.id} className="bg-white border border-zinc-200 rounded-2xl p-4 shadow-sm flex flex-col gap-4">
+                <div className="flex gap-4">
+                  {/* Cover Image or Placeholder */}
+                  <div className="w-16 h-24 shrink-0 rounded-md overflow-hidden bg-zinc-100 border border-zinc-200 flex items-center justify-center relative shadow-sm">
+                    {rb.book.coverUrl ? (
+                      <img src={rb.book.coverUrl} alt={rb.book.title} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                    ) : (
+                      <BookOpen size={20} className="text-zinc-400" />
+                    )}
+                  </div>
+                  
+                  {/* Book Details */}
+                  <div className="flex-1 min-w-0 flex flex-col justify-center">
+                    <h3 className="font-semibold text-zinc-900 line-clamp-2 leading-tight mb-1" title={rb.book.title}>
+                      {rb.book.title}
+                    </h3>
+                    <p className="text-xs text-zinc-600 font-medium line-clamp-1 mb-2" title={rb.book.author}>
+                      {rb.book.author || 'Unknown Author'}
+                    </p>
+                    <div className="mt-auto">
+                      <p className="text-[11px] text-zinc-500">From: <span className="font-medium text-zinc-700">{rb.senderName}</span></p>
+                      <p className="text-[10px] text-zinc-400">{new Date(rb.sentAt).toLocaleDateString()}</p>
+                    </div>
+                  </div>
                 </div>
-                <div className="flex gap-2 mt-auto pt-2">
+
+                <div className="flex gap-2 mt-auto pt-2 border-t border-zinc-100">
                   <Button size="sm" onClick={() => handleAcceptShare(rb)} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white">
                     <Check size={16} className="mr-1" /> Accept
                   </Button>

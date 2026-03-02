@@ -65,7 +65,11 @@ export default function Layout() {
           })}
         </nav>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-4">
+          <div className="hidden md:flex flex-col items-end">
+            <span className="text-sm font-medium text-zinc-900">{user?.name || user?.email}</span>
+            <span className="text-xs text-zinc-500">{user?.email}</span>
+          </div>
           <button
             onClick={handleLogout}
             className="hidden md:flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 transition-colors"
@@ -104,6 +108,10 @@ export default function Layout() {
             );
           })}
           <div className="h-px bg-zinc-200 my-2" />
+          <div className="px-4 py-2 flex flex-col">
+            <span className="text-sm font-medium text-zinc-900">{user?.name || user?.email}</span>
+            <span className="text-xs text-zinc-500">{user?.email}</span>
+          </div>
           <button
             onClick={() => {
               setIsMobileMenuOpen(false);
