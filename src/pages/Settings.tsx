@@ -1,8 +1,10 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useStore } from '../store/useStore';
 import { Button } from '../components/ui/Button';
-import { Save, Key, Volume2, Target, User as UserIcon, Eye, EyeOff } from 'lucide-react';
+import { Save, Key, Volume2, Target, User as UserIcon, Eye, EyeOff, Lock } from 'lucide-react';
 import { db } from '../lib/db';
+import { auth } from '../lib/firebase';
+import { updatePassword } from 'firebase/auth';
 
 export default function Settings() {
   const settings = useStore((state) => state.settings);
@@ -14,6 +16,10 @@ export default function Settings() {
   const [localName, setLocalName] = useState(user?.name || '');
   const [isSaved, setIsSaved] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
+  
+  const [newPassword, setNewPassword] = useState('');
+  const [passwordMessage, setPasswordMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
 
   useEffect(() => {
     setLocalSettings(settings);
@@ -37,6 +43,37 @@ export default function Settings() {
 
     setIsSaved(true);
     setTimeout(() => setIsSaved(false), 2000);
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPassword || newPassword.length < 6) {
+      setPasswordMessage({ type: 'error', text: 'Password must be at least 6 characters long.' });
+      return;
+    }
+
+    if (!auth.currentUser) {
+      setPasswordMessage({ type: 'error', text: 'You must be logged in to change your password.' });
+      return;
+    }
+
+    setIsChangingPassword(true);
+    setPasswordMessage(null);
+
+    try {
+      await updatePassword(auth.currentUser, newPassword);
+      setPasswordMessage({ type: 'success', text: 'Password updated successfully!' });
+      setNewPassword('');
+    } catch (error: any) {
+      console.error("Error updating password:", error);
+      if (error.code === 'auth/requires-recent-login') {
+        setPasswordMessage({ type: 'error', text: 'Please log out and log back in to change your password.' });
+      } else {
+        setPasswordMessage({ type: 'error', text: error.message || 'Failed to update password.' });
+      }
+    } finally {
+      setIsChangingPassword(false);
+    }
   };
 
   return (
@@ -84,6 +121,44 @@ export default function Settings() {
               />
             </div>
           </div>
+        </section>
+
+        {/* Account Security */}
+        <section className="bg-white p-6 rounded-3xl border border-zinc-200 shadow-sm">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="bg-red-50 text-red-600 p-2 rounded-xl">
+              <Lock size={20} />
+            </div>
+            <h2 className="text-xl font-semibold text-zinc-900">Account Security</h2>
+          </div>
+          
+          <form onSubmit={handleChangePassword} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 mb-1">
+                Change Password
+              </label>
+              <div className="flex gap-3">
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="flex-1 px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                  placeholder="New Password (min. 6 characters)"
+                />
+                <Button type="submit" disabled={isChangingPassword || !newPassword}>
+                  {isChangingPassword ? 'Updating...' : 'Update'}
+                </Button>
+              </div>
+              <p className="text-xs text-zinc-500 mt-2">
+                If you signed in with Google, updating your password will allow you to also sign in using your email and this new password.
+              </p>
+              {passwordMessage && (
+                <p className={`text-sm mt-2 ${passwordMessage.type === 'success' ? 'text-emerald-600' : 'text-red-600'}`}>
+                  {passwordMessage.text}
+                </p>
+              )}
+            </div>
+          </form>
         </section>
 
         {/* API Settings */}

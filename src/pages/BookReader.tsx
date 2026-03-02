@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Play, Pause, SkipBack, SkipForward, Settings as SettingsIcon, X, BookOpen, Languages, Search, ChevronLeft, ChevronRight, MessageSquare, Zap, Highlighter, Captions, Sparkles } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Settings as SettingsIcon, X, BookOpen, Languages, Search, ChevronLeft, ChevronRight, MessageSquare, Zap, Highlighter, Captions, Sparkles, Moon, Sun } from 'lucide-react';
 import { useStore, Book } from '../store/useStore';
 import { db } from '../lib/db';
 import { Button } from '../components/ui/Button';
@@ -120,10 +120,12 @@ export default function BookReader() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [geminiAudioData, setGeminiAudioData] = useState<{ url: string, sentences: string[] } | null>(null);
   const [isTurningPage, setIsTurningPage] = useState(false);
+  const pageStartTimeRef = useRef<number>(Date.now());
 
   const settings = useStore((state) => state.settings);
   const updateBook = useStore((state) => state.updateBook);
   const updateSettings = useStore((state) => state.updateSettings);
+  const addReadingSession = useStore((state) => state.addReadingSession);
   const apiCallCount = useStore((state) => state.apiCallCount);
   const apiKey = settings.apiKey;
 
@@ -211,6 +213,20 @@ export default function BookReader() {
       const updatedBook = { ...book, lastReadPage: pageIndex + 1 };
       await db.saveBook(updatedBook);
       updateBook(book.id, { lastReadPage: pageIndex + 1 });
+      
+      // Record reading session
+      const durationSeconds = Math.round((Date.now() - pageStartTimeRef.current) / 1000);
+      if (durationSeconds > 5) { // Only record if they spent at least 5 seconds on the page
+        addReadingSession({
+          id: crypto.randomUUID(),
+          bookId: book.id,
+          date: Date.now(),
+          pagesRead: 1,
+          durationSeconds: Math.min(durationSeconds, 3600), // Cap at 1 hour per page
+          language: book.language || 'Unknown'
+        });
+      }
+      pageStartTimeRef.current = Date.now();
     }
   };
 
@@ -813,7 +829,7 @@ export default function BookReader() {
   return (
     <div className={cn(
       "flex flex-col h-full transition-all duration-300 relative",
-      isImmersive ? "bg-[#f5f5f0]" : "bg-zinc-50"
+      isImmersive ? "bg-[#f5f5f0]" : settings.theme === 'dark' ? "bg-zinc-900 text-zinc-100" : "bg-zinc-50 text-zinc-900"
     )}>
       {errorMessage && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 p-4 bg-red-50 text-red-700 rounded-xl border border-red-200 flex justify-between items-center shadow-lg min-w-[300px]">
@@ -826,14 +842,17 @@ export default function BookReader() {
 
       {/* Top Bar */}
       {!isImmersive && (
-        <header className="flex items-center justify-between p-4 bg-white border-b border-zinc-200 shrink-0">
+        <header className={cn(
+          "flex items-center justify-between p-4 border-b shrink-0",
+          settings.theme === 'dark' ? "bg-zinc-900 border-zinc-800" : "bg-white border-zinc-200"
+        )}>
           <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={() => navigate('/')}>
+            <Button variant="ghost" size="icon" onClick={() => navigate('/')} className={settings.theme === 'dark' ? "text-zinc-300 hover:text-white" : ""}>
               <ChevronLeft size={20} />
             </Button>
             <div>
-              <h1 className="font-semibold text-zinc-900 leading-tight">{book.title}</h1>
-              <p className="text-xs text-zinc-500">{book.author}</p>
+              <h1 className={cn("font-semibold leading-tight", settings.theme === 'dark' ? "text-zinc-100" : "text-zinc-900")}>{book.title}</h1>
+              <p className={cn("text-xs", settings.theme === 'dark' ? "text-zinc-400" : "text-zinc-500")}>{book.author}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -847,6 +866,9 @@ export default function BookReader() {
               <MessageSquare size={20} className={showQuotes ? "text-blue-500" : "text-zinc-400"} />
             </Button>
             <div className="w-px h-6 bg-zinc-200 mx-2" />
+            <Button variant="ghost" size="icon" onClick={() => updateSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' })} title="Toggle Dark Mode">
+              {settings.theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
+            </Button>
             <Button variant="ghost" size="icon" onClick={() => setIsImmersive(true)} title="Immersive Mode">
               <BookOpen size={20} />
             </Button>
@@ -894,9 +916,10 @@ export default function BookReader() {
           )}
           <div 
             className={cn(
-              "max-w-4xl mx-auto prose prose-zinc transition-opacity duration-300",
+              "max-w-4xl mx-auto prose transition-opacity duration-300",
               isTurningPage ? "opacity-30" : "opacity-100",
-              settings.fontFamily === 'serif' ? 'font-serif' : settings.fontFamily === 'mono' ? 'font-mono' : 'font-sans'
+              settings.fontFamily === 'serif' ? 'font-serif' : settings.fontFamily === 'mono' ? 'font-mono' : 'font-sans',
+              settings.theme === 'dark' ? 'prose-invert prose-zinc' : 'prose-zinc'
             )}
             style={{ fontSize: `${settings.fontSize}px`, lineHeight: 1.8 }}
             onMouseUp={() => {
@@ -1005,39 +1028,40 @@ export default function BookReader() {
 
       {/* Bottom Controls */}
       <div className={cn(
-        "fixed bottom-4 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur-md border border-zinc-200/50 p-2 rounded-full shadow-lg transition-all duration-300 z-50 w-[95%] max-w-2xl",
-        isImmersive ? "translate-y-24 opacity-0 hover:opacity-100 hover:translate-y-0" : ""
+        "fixed bottom-4 left-1/2 -translate-x-1/2 backdrop-blur-md border p-2 rounded-full shadow-lg transition-all duration-300 z-50 w-[95%] max-w-2xl",
+        isImmersive ? "translate-y-24 opacity-0 hover:opacity-100 hover:translate-y-0" : "",
+        settings.theme === 'dark' ? "bg-zinc-900/90 border-zinc-800" : "bg-white/90 border-zinc-200/50"
       )}>
         <div className="flex items-center justify-between gap-2 md:gap-4 px-2">
           
           {/* Progress */}
           <div className="flex items-center gap-3 flex-1 min-w-0">
-            <span className="text-[10px] md:text-xs font-medium text-zinc-500 w-10 text-right shrink-0">
+            <span className={cn("text-[10px] md:text-xs font-medium w-10 text-right shrink-0", settings.theme === 'dark' ? "text-zinc-400" : "text-zinc-500")}>
               {currentPage + 1}/{pages.length}
             </span>
-            <div className="flex-1 h-1 bg-zinc-200/50 rounded-full overflow-hidden hidden sm:block">
+            <div className={cn("flex-1 h-1 rounded-full overflow-hidden hidden sm:block", settings.theme === 'dark' ? "bg-zinc-800" : "bg-zinc-200/50")}>
               <div 
-                className="h-full bg-zinc-900 rounded-full transition-all duration-300"
+                className={cn("h-full rounded-full transition-all duration-300", settings.theme === 'dark' ? "bg-zinc-400" : "bg-zinc-900")}
                 style={{ width: `${((currentPage + 1) / pages.length) * 100}%` }}
               />
             </div>
           </div>
 
           {/* API Counter */}
-          <div className="hidden md:flex items-center gap-1 text-[10px] font-medium text-zinc-500 bg-zinc-100 px-2 py-1 rounded-md shrink-0 border border-zinc-200/50" title="Gemini API Calls">
+          <div className={cn("hidden md:flex items-center gap-1 text-[10px] font-medium px-2 py-1 rounded-md shrink-0 border", settings.theme === 'dark' ? "text-zinc-400 bg-zinc-800 border-zinc-700" : "text-zinc-500 bg-zinc-100 border-zinc-200/50")} title="Gemini API Calls">
             <Zap size={10} className="text-yellow-500" />
             <span>{apiCallCount}</span>
           </div>
 
           {/* TTS Controls */}
           <div className="flex items-center justify-center gap-1 shrink-0">
-            <Button variant="ghost" size="icon" onClick={() => handleTextSelection('quote')} title="Save Quote" className="hidden sm:inline-flex h-7 w-7 rounded-full">
+            <Button variant="ghost" size="icon" onClick={() => handleTextSelection('quote')} title="Save Quote" className={cn("hidden sm:inline-flex h-7 w-7 rounded-full", settings.theme === 'dark' ? "hover:bg-zinc-800 text-zinc-300" : "")}>
               <Highlighter size={14} />
             </Button>
-            <Button variant="ghost" size="icon" onClick={() => handleTextSelection('def')} title="Define selected text" className="hidden sm:inline-flex h-7 w-7 rounded-full">
+            <Button variant="ghost" size="icon" onClick={() => handleTextSelection('def')} title="Define selected text" className={cn("hidden sm:inline-flex h-7 w-7 rounded-full", settings.theme === 'dark' ? "hover:bg-zinc-800 text-zinc-300" : "")}>
               <Search size={14} />
             </Button>
-            <Button variant="ghost" size="icon" onClick={() => handleTextSelection('trans')} title="Translate selected text" className="h-7 w-7 rounded-full">
+            <Button variant="ghost" size="icon" onClick={() => handleTextSelection('trans')} title="Translate selected text" className={cn("h-7 w-7 rounded-full", settings.theme === 'dark' ? "hover:bg-zinc-800 text-zinc-300" : "")}>
               <Languages size={14} />
             </Button>
             <Button 
@@ -1049,14 +1073,14 @@ export default function BookReader() {
                 db.saveSettings({ ...settings, isSubtitleTranslationEnabled: newValue });
               }} 
               title={`Toggle ${settings.subtitleLanguage} Subtitles`} 
-              className={cn("h-7 w-7 rounded-full", settings.isSubtitleTranslationEnabled ? "text-blue-500 bg-blue-50" : "")}
+              className={cn("h-7 w-7 rounded-full", settings.isSubtitleTranslationEnabled ? (settings.theme === 'dark' ? "text-blue-400 bg-blue-900/30" : "text-blue-500 bg-blue-50") : (settings.theme === 'dark' ? "hover:bg-zinc-800 text-zinc-300" : ""))}
             >
               <Captions size={14} />
             </Button>
             
-            <div className="w-px h-4 bg-zinc-300 mx-1" />
+            <div className={cn("w-px h-4 mx-1", settings.theme === 'dark' ? "bg-zinc-700" : "bg-zinc-300")} />
 
-            <Button variant="ghost" size="icon" onClick={handlePrevPage} className="h-7 w-7 rounded-full">
+            <Button variant="ghost" size="icon" onClick={handlePrevPage} className={cn("h-7 w-7 rounded-full", settings.theme === 'dark' ? "hover:bg-zinc-800 text-zinc-300" : "")}>
               <SkipBack size={14} />
             </Button>
             <Button 
@@ -1073,7 +1097,7 @@ export default function BookReader() {
                 <Play size={16} className="fill-current ml-0.5" />
               )}
             </Button>
-            <Button variant="ghost" size="icon" onClick={handleNextPage} className="h-7 w-7 rounded-full">
+            <Button variant="ghost" size="icon" onClick={handleNextPage} className={cn("h-7 w-7 rounded-full", settings.theme === 'dark' ? "hover:bg-zinc-800 text-zinc-300" : "")}>
               <SkipForward size={14} />
             </Button>
           </div>
@@ -1081,11 +1105,11 @@ export default function BookReader() {
           {/* Settings / Exit Immersive */}
           <div className="flex-1 flex justify-end min-w-0">
             {isImmersive ? (
-              <Button variant="outline" size="sm" onClick={() => setIsImmersive(false)} className="text-[10px] h-7 px-2 rounded-full">
+              <Button variant="outline" size="sm" onClick={() => setIsImmersive(false)} className={cn("text-[10px] h-7 px-2 rounded-full", settings.theme === 'dark' ? "border-zinc-700 text-zinc-300 hover:bg-zinc-800" : "")}>
                 Exit
               </Button>
             ) : (
-              <Button variant="ghost" size="icon" onClick={() => navigate('/settings')} className="h-7 w-7 rounded-full">
+              <Button variant="ghost" size="icon" onClick={() => navigate('/settings')} className={cn("h-7 w-7 rounded-full", settings.theme === 'dark' ? "hover:bg-zinc-800 text-zinc-300" : "")}>
                 <SettingsIcon size={14} />
               </Button>
             )}

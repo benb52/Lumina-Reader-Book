@@ -35,6 +35,15 @@ export interface VocabularyWord {
   addedAt: number;
 }
 
+export interface ReadingSession {
+  id: string;
+  bookId: string;
+  date: number;
+  pagesRead: number;
+  durationSeconds: number;
+  language: string;
+}
+
 export interface AppSettings {
   theme: 'light' | 'dark';
   fontSize: number;
@@ -49,6 +58,7 @@ export interface AppSettings {
   subtitleLanguage: string;
   autoTurnPage: boolean;
   isSubtitleTranslationEnabled: boolean;
+  statisticsTimeframe: 'day' | 'week' | 'month' | 'year' | 'all';
 }
 
 interface AppState {
@@ -67,6 +77,9 @@ interface AppState {
   setVocabulary: (words: VocabularyWord[]) => void;
   addVocabularyWord: (word: VocabularyWord) => void;
   removeVocabularyWord: (id: string) => void;
+  readingSessions: ReadingSession[];
+  addReadingSession: (session: ReadingSession) => void;
+  setReadingSessions: (sessions: ReadingSession[]) => void;
 }
 
 export const useStore = create<AppState>()(
@@ -88,6 +101,7 @@ export const useStore = create<AppState>()(
         subtitleLanguage: 'Hebrew',
         autoTurnPage: false,
         isSubtitleTranslationEnabled: false,
+        statisticsTimeframe: 'all',
       },
       login: (user) => set({ user }),
       logout: () => set({ user: null }),
@@ -106,6 +120,9 @@ export const useStore = create<AppState>()(
       setVocabulary: (words) => set({ vocabulary: words }),
       addVocabularyWord: (word) => set((state) => ({ vocabulary: [word, ...state.vocabulary] })),
       removeVocabularyWord: (id) => set((state) => ({ vocabulary: state.vocabulary.filter(w => w.id !== id) })),
+      readingSessions: [],
+      addReadingSession: (session) => set((state) => ({ readingSessions: [...state.readingSessions, session] })),
+      setReadingSessions: (sessions) => set({ readingSessions: sessions }),
     }),
     {
       name: 'lumina-storage',

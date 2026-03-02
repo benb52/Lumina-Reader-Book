@@ -119,9 +119,9 @@ export default function AdminDashboard() {
         <div className="p-6 border-b border-zinc-200">
           <h2 className="text-lg font-semibold text-zinc-900">User Statistics</h2>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm text-zinc-600">
-            <thead className="bg-zinc-50 text-zinc-500 border-b border-zinc-200">
+        <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+          <table className="w-full text-left text-sm text-zinc-600 relative">
+            <thead className="bg-zinc-50 text-zinc-500 border-b border-zinc-200 sticky top-0 z-10">
               <tr>
                 <th className="px-6 py-4 font-medium">Name</th>
                 <th className="px-6 py-4 font-medium">Email</th>
