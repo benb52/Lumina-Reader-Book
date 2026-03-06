@@ -5,6 +5,7 @@
 
 import * as pdfjs from "pdfjs-dist";
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import mammoth from 'mammoth';
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -340,10 +341,58 @@ function buildDisplayPages(paragraphs: string[]): DisplayPages {
       chapters.push({ title: para, page: pages.length + 1 });
     }
 
-    // פסקה ארוכה מאוד: נותנים לה עמוד לבד
+    // פסקה ארוכה מאוד: נפצל אותה למשפטים כדי לא לחרוג מהמקסימום
     if (para.length > MAX_PAGE_CHARS) {
-      flushPage();
-      pages.push(para);
+      const sentences = para.match(/[^.!?]+[.!?]+/g) || [para];
+      let currentChunk = "";
+      
+      for (const sentence of sentences) {
+        const trimmedSentence = sentence.trim();
+        if (!trimmedSentence) continue;
+        
+        // אם המשפט עצמו ארוך מהמקסימום (נדיר מאוד), נאלץ לחתוך אותו
+        if (trimmedSentence.length > MAX_PAGE_CHARS) {
+          if (currentChunk.trim()) {
+            currentParagraphs.push(currentChunk.trim());
+            flushPage();
+            currentChunk = "";
+          }
+          
+          let remaining = trimmedSentence;
+          while (remaining.length > 0) {
+            const part = remaining.substring(0, MAX_PAGE_CHARS);
+            currentParagraphs.push(part);
+            flushPage();
+            remaining = remaining.substring(MAX_PAGE_CHARS);
+          }
+          continue;
+        }
+        
+        if (currentChunk.length + trimmedSentence.length > MAX_PAGE_CHARS) {
+          // הצ'אנק הנוכחי מלא, נוסיף אותו לפסקאות ונרוקן עמוד אם צריך
+          if (currentChars + currentChunk.length > MAX_PAGE_CHARS && currentChars >= MIN_PAGE_CHARS) {
+            flushPage();
+          }
+          currentParagraphs.push(currentChunk.trim());
+          currentChars += currentChunk.length + 2;
+          
+          if (currentChars >= TARGET_PAGE_CHARS) {
+            flushPage();
+          }
+          
+          currentChunk = trimmedSentence + " ";
+        } else {
+          currentChunk += trimmedSentence + " ";
+        }
+      }
+      
+      if (currentChunk.trim()) {
+        if (currentChars + currentChunk.length > MAX_PAGE_CHARS && currentChars >= MIN_PAGE_CHARS) {
+          flushPage();
+        }
+        currentParagraphs.push(currentChunk.trim());
+        currentChars += currentChunk.length + 2;
+      }
       continue;
     }
 
@@ -397,4 +446,11 @@ export function parseTXT(text: string): ParsedBook {
     .join("");
 
   return { paragraphs, content, totalPages: pages.length, chapters };
+}
+
+// ─── פענוח קבצי DOCX ──────────────────────────────────────────────────────────
+export async function parseDOCX(arrayBuffer: ArrayBuffer): Promise<ParsedBook> {
+  const result = await mammoth.extractRawText({ arrayBuffer });
+  const text = result.value;
+  return parseTXT(text);
 }

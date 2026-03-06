@@ -4,7 +4,7 @@ import { Plus, FileText, Upload, Trash2, Edit3, BookOpen, Archive, ArchiveRestor
 import { useStore, Book } from '../store/useStore';
 import { db } from '../lib/db';
 import { Button } from '../components/ui/Button';
-import { parsePDF, parseTXT } from '../services/pdf';
+import { parsePDF, parseTXT, parseDOCX } from '../services/pdf';
 import { analyzeBookWithAI } from '../services/ai';
 import { cn } from '../lib/utils';
 
@@ -22,11 +22,60 @@ export default function Library() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const apiKey = useStore((state) => state.settings.apiKey);
 
+  // Paste Text state
+  const [isPasteModalOpen, setIsPasteModalOpen] = useState(false);
+  const [pastedTitle, setPastedTitle] = useState('');
+  const [pastedText, setPastedText] = useState('');
+
   useEffect(() => {
     loadBooks();
     loadReceivedBooks();
   }, []);
 
+  const handlePasteSubmit = async () => {
+    if (!pastedTitle.trim() || !pastedText.trim()) return;
+    
+    setIsImporting(true);
+    setErrorMessage(null);
+    setIsPasteModalOpen(false);
+    
+    try {
+      const parsedBook = parseTXT(pastedText);
+      
+      const newBook: Book = {
+        id: crypto.randomUUID(),
+        title: pastedTitle.trim(),
+        author: 'Unknown Author',
+        content: parsedBook.content,
+        totalPages: parsedBook.totalPages,
+        lastReadPage: 1,
+        addedAt: Date.now(),
+        isArchived: false,
+      };
+
+      if (apiKey) {
+        try {
+          const analysis = await analyzeBookWithAI(parsedBook.content, apiKey);
+          if (analysis) {
+            newBook.analysis = analysis;
+          }
+        } catch (err) {
+          console.error('AI Analysis failed during import', err);
+        }
+      }
+
+      await db.saveBook(newBook);
+      await loadBooks();
+      setSuccessMessage(`Added "${newBook.title}" to your library.`);
+      setPastedTitle('');
+      setPastedText('');
+    } catch (err) {
+      console.error('Import failed', err);
+      setErrorMessage('Failed to import pasted text.');
+    } finally {
+      setIsImporting(false);
+    }
+  };
   const loadReceivedBooks = async () => {
     try {
       const rBooks = await db.getReceivedBooks();
@@ -59,8 +108,11 @@ export default function Library() {
       } else if (file.type === 'text/plain') {
         const text = await file.text();
         parsedBook = parseTXT(text);
+      } else if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.name.endsWith('.docx')) {
+        const arrayBuffer = await file.arrayBuffer();
+        parsedBook = await parseDOCX(arrayBuffer);
       } else {
-        setErrorMessage('Unsupported file type. Please upload PDF or TXT.');
+        setErrorMessage('Unsupported file type. Please upload PDF, TXT, or DOCX.');
         setIsImporting(false);
         return;
       }
@@ -300,11 +352,20 @@ export default function Library() {
           >
             {showArchived ? 'Show Active Books' : 'Show Archived'}
           </Button>
+          <Button 
+            variant="outline" 
+            onClick={() => setIsPasteModalOpen(true)}
+            className="w-full sm:w-auto justify-center"
+            disabled={isImporting}
+          >
+            <FileText size={18} className="mr-2" />
+            Paste Text
+          </Button>
           <input
             type="file"
             id="import-file"
             className="hidden"
-            accept=".pdf,.txt"
+            accept=".pdf,.txt,.docx"
             onChange={handleImport}
             disabled={isImporting}
           />
@@ -340,10 +401,14 @@ export default function Library() {
               : 'Import a PDF or TXT file to start reading and analyzing your documents.'}
           </p>
           {!showArchived && (
-            <label htmlFor="import-file" className="mt-6">
+            <label htmlFor="import-file" className="mt-6 flex flex-col sm:flex-row gap-3">
               <Button variant="outline" as="span" className="cursor-pointer">
                 <Plus size={18} className="mr-2" />
-                Add your first book
+                Upload File
+              </Button>
+              <Button variant="outline" onClick={(e) => { e.preventDefault(); setIsPasteModalOpen(true); }} className="cursor-pointer">
+                <FileText size={18} className="mr-2" />
+                Paste Text
               </Button>
             </label>
           )}
@@ -443,6 +508,48 @@ export default function Library() {
           ))}
         </div>
       )}
+      {isPasteModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white p-6 rounded-2xl shadow-xl max-w-2xl w-full mx-auto flex flex-col max-h-[90vh]">
+            <h3 className="text-xl font-semibold text-zinc-900 mb-4">Paste Text</h3>
+            
+            <div className="space-y-4 flex-1 overflow-y-auto min-h-0">
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 mb-1">Title</label>
+                <input
+                  type="text"
+                  placeholder="Enter book title"
+                  className="w-full p-3 border border-zinc-300 rounded-xl focus:ring-2 focus:ring-zinc-900 focus:border-transparent outline-none"
+                  value={pastedTitle}
+                  onChange={(e) => setPastedTitle(e.target.value)}
+                />
+              </div>
+              
+              <div className="flex-1 flex flex-col">
+                <label className="block text-sm font-medium text-zinc-700 mb-1">Text Content</label>
+                <textarea
+                  placeholder="Paste your text here..."
+                  className="w-full p-3 border border-zinc-300 rounded-xl focus:ring-2 focus:ring-zinc-900 focus:border-transparent outline-none flex-1 min-h-[200px] resize-none"
+                  value={pastedText}
+                  onChange={(e) => setPastedText(e.target.value)}
+                />
+              </div>
+            </div>
+            
+            <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-100 shrink-0">
+              <Button variant="outline" onClick={() => setIsPasteModalOpen(false)}>Cancel</Button>
+              <Button 
+                onClick={handlePasteSubmit} 
+                disabled={!pastedTitle.trim() || !pastedText.trim() || isImporting} 
+                className="bg-zinc-900 text-white"
+              >
+                {isImporting ? 'Importing...' : 'Import Text'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

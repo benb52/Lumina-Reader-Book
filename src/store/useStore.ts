@@ -17,6 +17,7 @@ export interface Book {
   addedAt: number;
   isArchived?: boolean;
   language?: string;
+  textDirection?: 'ltr' | 'rtl';
   coverUrl?: string;
   analysis?: {
     summary: string;

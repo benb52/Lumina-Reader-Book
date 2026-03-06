@@ -20,6 +20,7 @@ export default function BookOrchestrator() {
   const [bookAuthor, setBookAuthor] = useState<string>('');
   const [bookCoverUrl, setBookCoverUrl] = useState<string>('');
   const [bookLanguage, setBookLanguage] = useState<string>('');
+  const [textDirection, setTextDirection] = useState<'ltr' | 'rtl'>('ltr');
 
   useEffect(() => {
     if (id) {
@@ -35,6 +36,7 @@ export default function BookOrchestrator() {
       setBookAuthor(b.author || '');
       setBookCoverUrl(b.coverUrl || '');
       setBookLanguage(b.language || '');
+      setTextDirection(b.textDirection || 'ltr');
       // Split content by our marker
       const pgs = b.content.split('<<LUMINA_PAGE_BREAK>>').filter(p => p.trim() !== '');
       // Clean up <<PAGE:X>> markers for editing
@@ -119,7 +121,8 @@ export default function BookOrchestrator() {
         coverUrl: bookCoverUrl,
         content,
         totalPages: pages.length,
-        language: bookLanguage
+        language: bookLanguage,
+        textDirection
       };
       await db.saveBook(updatedBook);
       updateBook(book.id, { 
@@ -128,7 +131,8 @@ export default function BookOrchestrator() {
         coverUrl: bookCoverUrl,
         content,
         totalPages: updatedBook.totalPages,
-        language: bookLanguage
+        language: bookLanguage,
+        textDirection
       });
       navigate(`/book/${book.id}`);
     } catch (err) {
@@ -178,6 +182,17 @@ export default function BookOrchestrator() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+          <div className="flex items-center gap-2 mr-4">
+            <label className="text-sm text-zinc-600">Direction:</label>
+            <select
+              value={textDirection}
+              onChange={(e) => setTextDirection(e.target.value as 'ltr' | 'rtl')}
+              className="px-3 py-1.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white"
+            >
+              <option value="ltr">Left-to-Right</option>
+              <option value="rtl">Right-to-Left</option>
+            </select>
+          </div>
           <div className="flex items-center gap-2 mr-4">
             <label className="text-sm text-zinc-600">Language:</label>
             <input 
@@ -273,6 +288,7 @@ export default function BookOrchestrator() {
             id="page-editor"
             value={pages[currentPageIndex] || ''}
             onChange={(e) => handleContentChange(e.target.value)}
+            dir={textDirection}
             className="flex-1 w-full p-4 md:p-6 resize-y min-h-[60vh] focus:outline-none focus:ring-0 font-mono text-sm leading-relaxed text-zinc-800"
             spellCheck={false}
             placeholder="Enter page content here..."

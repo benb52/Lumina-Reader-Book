@@ -922,6 +922,7 @@ export default function BookReader() {
               settings.theme === 'dark' ? 'prose-invert prose-zinc' : 'prose-zinc'
             )}
             style={{ fontSize: `${settings.fontSize}px`, lineHeight: 1.8 }}
+            dir={book.textDirection || 'ltr'}
             onMouseUp={() => {
               // Show a small popover or just rely on the buttons below for now
             }}
@@ -989,7 +990,7 @@ export default function BookReader() {
                   Translating...
                 </div>
               ) : (
-                <div className="text-lg md:text-xl font-medium leading-relaxed whitespace-pre-wrap" dir="auto" style={{ textShadow: '0 2px 4px rgba(0,0,0,0.5)' }}>
+                <div className="text-lg md:text-xl font-medium leading-relaxed whitespace-pre-wrap" dir={book.textDirection || 'auto'} style={{ textShadow: '0 2px 4px rgba(0,0,0,0.5)' }}>
                   {currentSubtitle}
                 </div>
               )}

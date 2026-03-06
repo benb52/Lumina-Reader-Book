@@ -19,8 +19,12 @@ export const db = {
         return docSnap.data();
       }
       return null;
-    } catch (error) {
-      console.error("Error getting user metadata:", error);
+    } catch (error: any) {
+      if (error.code === 'permission-denied' || error.code === 'unavailable') {
+        console.warn("Firebase permission denied or offline. Cannot get user metadata.");
+      } else {
+        console.error("Error getting user metadata:", error);
+      }
       return null;
     }
   },
@@ -43,8 +47,12 @@ export const db = {
       }
 
       await setDoc(userRef, updateData, { merge: true });
-    } catch (error) {
-      console.error("Error updating user metadata:", error);
+    } catch (error: any) {
+      if (error.code === 'permission-denied' || error.code === 'unavailable') {
+        console.warn("Firebase permission denied or offline. Cannot update user metadata.");
+      } else {
+        console.error("Error updating user metadata:", error);
+      }
     }
   },
 
@@ -57,7 +65,7 @@ export const db = {
       });
       return users;
     } catch (error: any) {
-      if (error.code !== 'permission-denied') {
+      if (error.code !== 'permission-denied' && error.code !== 'unavailable') {
         console.error("Error getting all users:", error);
       }
       throw error;
@@ -69,7 +77,7 @@ export const db = {
       const querySnapshot = await getDocs(collection(firestore, `users/${userId}/books`));
       return querySnapshot.size;
     } catch (error: any) {
-      if (error.code !== 'permission-denied') {
+      if (error.code !== 'permission-denied' && error.code !== 'unavailable') {
         console.error("Error getting user books count:", error);
       }
       throw error;
@@ -113,7 +121,7 @@ export const db = {
       });
       return receivedBooks.sort((a, b) => b.sentAt - a.sentAt);
     } catch (error: any) {
-      if (error.code !== 'permission-denied') {
+      if (error.code !== 'permission-denied' && error.code !== 'unavailable') {
         console.error("Error getting received books:", error);
       }
       throw error;
@@ -124,7 +132,7 @@ export const db = {
     try {
       await deleteDoc(doc(firestore, 'shared_books', shareId));
     } catch (error: any) {
-      if (error.code !== 'permission-denied') {
+      if (error.code !== 'permission-denied' && error.code !== 'unavailable') {
         console.error("Error deleting received book:", error);
       }
       throw error;
@@ -142,8 +150,8 @@ export const db = {
     try {
       await setDoc(doc(firestore, `users/${userId}/books`, book.id), book);
     } catch (error: any) {
-      if (error.code === 'permission-denied') {
-        console.warn("Firebase permission denied. Data saved locally only.");
+      if (error.code === 'permission-denied' || error.code === 'unavailable') {
+        console.warn("Firebase permission denied or offline. Data saved locally only.");
       } else {
         console.error("Error saving to Firebase:", error);
       }
@@ -175,8 +183,8 @@ export const db = {
         return book;
       }
     } catch (error: any) {
-      if (error.code === 'permission-denied') {
-        console.warn("Firebase permission denied. Using local data if available.");
+      if (error.code === 'permission-denied' || error.code === 'unavailable') {
+        console.warn("Firebase permission denied or offline. Using local data if available.");
       } else {
         console.error("Error getting from Firebase:", error);
       }
@@ -196,8 +204,8 @@ export const db = {
     try {
       await deleteDoc(doc(firestore, `users/${userId}/books`, id));
     } catch (error: any) {
-      if (error.code === 'permission-denied') {
-        console.warn("Firebase permission denied. Data deleted locally only.");
+      if (error.code === 'permission-denied' || error.code === 'unavailable') {
+        console.warn("Firebase permission denied or offline. Data deleted locally only.");
       } else {
         console.error("Error deleting from Firebase:", error);
       }
@@ -233,8 +241,8 @@ export const db = {
           await set(`book-${userId}-${book.id}`, book);
         }
       } catch (error: any) {
-        if (error.code === 'permission-denied') {
-          console.warn("Firebase permission denied. Using local data only.");
+        if (error.code === 'permission-denied' || error.code === 'unavailable') {
+          console.warn("Firebase permission denied or offline. Using local data only.");
         } else {
           console.error("Error getting all books from Firebase:", error);
         }
@@ -255,8 +263,8 @@ export const db = {
     try {
       await setDoc(doc(firestore, `users/${userId}/quotes`, bookId), { quotes });
     } catch (error: any) {
-      if (error.code === 'permission-denied') {
-        console.warn("Firebase permission denied. Quotes saved locally only.");
+      if (error.code === 'permission-denied' || error.code === 'unavailable') {
+        console.warn("Firebase permission denied or offline. Quotes saved locally only.");
       } else {
         console.error("Error saving quotes to Firebase:", error);
       }
@@ -281,8 +289,8 @@ export const db = {
         return quotes;
       }
     } catch (error: any) {
-      if (error.code === 'permission-denied') {
-        console.warn("Firebase permission denied. Using local quotes if available.");
+      if (error.code === 'permission-denied' || error.code === 'unavailable') {
+        console.warn("Firebase permission denied or offline. Using local quotes if available.");
       } else {
         console.error("Error getting quotes from Firebase:", error);
       }
@@ -297,8 +305,8 @@ export const db = {
     try {
       await setDoc(doc(firestore, `users/${userId}/settings`, 'preferences'), settings);
     } catch (error: any) {
-      if (error.code === 'permission-denied') {
-        console.warn("Firebase permission denied. Settings saved locally only.");
+      if (error.code === 'permission-denied' || error.code === 'unavailable') {
+        console.warn("Firebase permission denied or offline. Settings saved locally only.");
       } else {
         console.error("Error saving settings to Firebase:", error);
       }
@@ -316,8 +324,8 @@ export const db = {
         return docSnap.data() as AppSettings;
       }
     } catch (error: any) {
-      if (error.code === 'permission-denied') {
-        console.warn("Firebase permission denied. Using local settings.");
+      if (error.code === 'permission-denied' || error.code === 'unavailable') {
+        console.warn("Firebase permission denied or offline. Using local settings.");
       } else {
         console.error("Error getting settings from Firebase:", error);
       }
@@ -331,8 +339,12 @@ export const db = {
 
     try {
       await setDoc(doc(firestore, `users/${userId}/vocabulary`, word.id), word);
-    } catch (error) {
-      console.error("Error saving vocabulary word to Firebase:", error);
+    } catch (error: any) {
+      if (error.code === 'permission-denied' || error.code === 'unavailable') {
+        console.warn("Firebase permission denied or offline. Vocabulary saved locally only.");
+      } else {
+        console.error("Error saving vocabulary word to Firebase:", error);
+      }
     }
   },
 
@@ -347,8 +359,12 @@ export const db = {
         words.push(doc.data() as VocabularyWord);
       });
       return words.sort((a, b) => b.addedAt - a.addedAt);
-    } catch (error) {
-      console.error("Error getting vocabulary from Firebase:", error);
+    } catch (error: any) {
+      if (error.code === 'permission-denied' || error.code === 'unavailable') {
+        console.warn("Firebase permission denied or offline. Using local vocabulary if available.");
+      } else {
+        console.error("Error getting vocabulary from Firebase:", error);
+      }
       return [];
     }
   },
@@ -359,8 +375,12 @@ export const db = {
 
     try {
       await deleteDoc(doc(firestore, `users/${userId}/vocabulary`, id));
-    } catch (error) {
-      console.error("Error deleting vocabulary word from Firebase:", error);
+    } catch (error: any) {
+      if (error.code === 'permission-denied' || error.code === 'unavailable') {
+        console.warn("Firebase permission denied or offline. Vocabulary deleted locally only.");
+      } else {
+        console.error("Error deleting vocabulary word from Firebase:", error);
+      }
     }
   }
 };

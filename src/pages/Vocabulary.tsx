@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../store/useStore';
 import { db } from '../lib/db';
-import { BookA, Trash2, Search, BookOpen } from 'lucide-react';
+import { BookA, Trash2, Search, BookOpen, Download } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 
 export default function Vocabulary() {
@@ -30,6 +30,31 @@ export default function Vocabulary() {
     w.definition.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  const handleExportCSV = () => {
+    if (vocabulary.length === 0) return;
+    
+    // Create CSV content
+    const headers = ['Word', 'Definition', 'Context', 'Added Date'];
+    const rows = vocabulary.map(v => [
+      `"${v.word.replace(/"/g, '""')}"`,
+      `"${v.definition.replace(/"/g, '""')}"`,
+      `"${(v.context || '').replace(/"/g, '""')}"`,
+      `"${new Date(v.addedAt).toLocaleDateString()}"`
+    ]);
+    
+    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    
+    // Create download link
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `lumina_vocabulary_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="p-4 md:p-8 max-w-5xl mx-auto h-full flex flex-col">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8 shrink-0">
@@ -41,15 +66,26 @@ export default function Vocabulary() {
           <p className="text-zinc-500 mt-1">Words you've saved while reading.</p>
         </div>
         
-        <div className="relative w-full md:w-72">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" size={18} />
-          <input 
-            type="text" 
-            placeholder="Search words..." 
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 bg-white border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:border-transparent transition-all"
-          />
+        <div className="flex flex-col md:flex-row gap-3 w-full md:w-auto">
+          <div className="relative w-full md:w-72">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" size={18} />
+            <input 
+              type="text" 
+              placeholder="Search words..." 
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 bg-white border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:border-transparent transition-all"
+            />
+          </div>
+          <Button 
+            variant="outline" 
+            onClick={handleExportCSV}
+            disabled={vocabulary.length === 0}
+            className="flex items-center gap-2"
+          >
+            <Download size={18} />
+            Export CSV
+          </Button>
         </div>
       </div>
 

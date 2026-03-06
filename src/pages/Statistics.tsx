@@ -1,8 +1,20 @@
 import { useState, useEffect, useMemo } from 'react';
-import { BarChart3, BookOpen, Clock, Target, CalendarDays, Globe } from 'lucide-react';
+import { BarChart3, BookOpen, Clock, Target, CalendarDays, Globe, TrendingUp } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { db } from '../lib/db';
 import { cn } from '../lib/utils';
+import {
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Legend
+} from 'recharts';
 
 export default function Statistics() {
   const settings = useStore((state) => state.settings);
@@ -17,6 +29,7 @@ export default function Statistics() {
   });
 
   const [languageStats, setLanguageStats] = useState<Record<string, number>>({});
+  const [chartData, setChartData] = useState<any[]>([]);
 
   const timeframe = settings.statisticsTimeframe || 'all';
 
@@ -61,7 +74,49 @@ export default function Statistics() {
       langStats[lang] = (langStats[lang] || 0) + session.pagesRead;
     });
 
-    setLanguageStats(langStats);
+    // Prepare chart data
+    const dataMap = new Map<string, { date: string, pages: number, duration: number }>();
+    
+    filteredSessions.forEach(session => {
+      const dateObj = new Date(session.date);
+      let dateKey = '';
+      
+      if (timeframe === 'day' || timeframe === 'week' || timeframe === 'month') {
+        dateKey = dateObj.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      } else if (timeframe === 'year') {
+        dateKey = dateObj.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+      } else {
+        dateKey = dateObj.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+      }
+
+      const existing = dataMap.get(dateKey) || { date: dateKey, pages: 0, duration: 0 };
+      existing.pages += session.pagesRead;
+      existing.duration += Math.round(session.durationSeconds / 60); // in minutes
+      dataMap.set(dateKey, existing);
+    });
+
+    // Sort by actual date (this is a bit tricky with formatted strings, so we sort the sessions first or parse back)
+    // A simpler way is to sort the map keys by creating a Date object from them, but since we process filteredSessions,
+    // let's just sort the final array by assuming the order might be mixed, or we sort filteredSessions first.
+    
+    const sortedSessions = [...filteredSessions].sort((a, b) => a.date - b.date);
+    const sortedDataMap = new Map<string, { date: string, pages: number, duration: number }>();
+    
+    sortedSessions.forEach(session => {
+      const dateObj = new Date(session.date);
+      let dateKey = '';
+      if (timeframe === 'day' || timeframe === 'week' || timeframe === 'month') {
+        dateKey = dateObj.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      } else {
+        dateKey = dateObj.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+      }
+      const existing = sortedDataMap.get(dateKey) || { date: dateKey, pages: 0, duration: 0 };
+      existing.pages += session.pagesRead;
+      existing.duration += Math.round(session.durationSeconds / 60);
+      sortedDataMap.set(dateKey, existing);
+    });
+
+    setChartData(Array.from(sortedDataMap.values()));
 
     if (timeframe === 'all') {
       // For 'all' time, we can also use the book's lastReadPage as a fallback/baseline
@@ -166,6 +221,67 @@ export default function Statistics() {
           </div>
         )}
       </div>
+
+      {chartData.length > 0 && (
+        <div className="bg-white p-6 md:p-8 rounded-2xl md:rounded-3xl border border-zinc-200 shadow-sm mb-8">
+          <h2 className="text-lg md:text-xl font-semibold text-zinc-900 mb-6 flex items-center gap-2">
+            <TrendingUp className="text-zinc-400" size={20} />
+            Reading Trends
+          </h2>
+          <div className="h-72 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e4e4e7" />
+                <XAxis 
+                  dataKey="date" 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{ fill: '#71717a', fontSize: 12 }} 
+                  dy={10}
+                />
+                <YAxis 
+                  yAxisId="left"
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{ fill: '#71717a', fontSize: 12 }}
+                />
+                <YAxis 
+                  yAxisId="right" 
+                  orientation="right" 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{ fill: '#71717a', fontSize: 12 }}
+                />
+                <Tooltip 
+                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}
+                  cursor={{ stroke: '#e4e4e7', strokeWidth: 2 }}
+                />
+                <Legend iconType="circle" wrapperStyle={{ paddingTop: '20px' }} />
+                <Line 
+                  yAxisId="left"
+                  type="monotone" 
+                  name="Pages Read"
+                  dataKey="pages" 
+                  stroke="#3b82f6" 
+                  strokeWidth={3}
+                  dot={{ r: 4, strokeWidth: 2 }}
+                  activeDot={{ r: 6 }}
+                />
+                <Line 
+                  yAxisId="right"
+                  type="monotone" 
+                  name="Duration (min)"
+                  dataKey="duration" 
+                  stroke="#10b981" 
+                  strokeWidth={3}
+                  dot={{ r: 4, strokeWidth: 2 }}
+                  activeDot={{ r: 6 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
         <div className="bg-white p-6 md:p-8 rounded-2xl md:rounded-3xl border border-zinc-200 shadow-sm">
