@@ -205,6 +205,43 @@ export default function Settings() {
                 Required for AI analysis, translation, and definitions. Your key is stored securely in your personal account and cannot be accessed by other users.
               </p>
             </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4">
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 mb-1">
+                  AI Features Language
+                </label>
+                <select
+                  value={localSettings.aiLanguage}
+                  onChange={(e) => setLocalSettings({ ...localSettings, aiLanguage: e.target.value as 'he' | 'en' })}
+                  className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white"
+                >
+                  <option value="he">Hebrew</option>
+                  <option value="en">English</option>
+                </select>
+                <p className="text-xs text-zinc-500 mt-1">
+                  Language for AI Summary and X-Ray.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 mb-1">
+                  AI Context Size (Save API Calls)
+                </label>
+                <select
+                  value={localSettings.aiChunkSizeMultiplier}
+                  onChange={(e) => setLocalSettings({ ...localSettings, aiChunkSizeMultiplier: parseInt(e.target.value) })}
+                  className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white"
+                >
+                  <option value="1">1x (Default - Faster)</option>
+                  <option value="2">2x (Longer context)</option>
+                  <option value="3">3x (Max context - Saves calls)</option>
+                </select>
+                <p className="text-xs text-zinc-500 mt-1">
+                  Send more text to Gemini at once to reduce the number of API calls.
+                </p>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -369,6 +406,25 @@ export default function Settings() {
                   className="sr-only peer" 
                   checked={localSettings.isSubtitleTranslationEnabled}
                   onChange={(e) => setLocalSettings({ ...localSettings, isSubtitleTranslationEnabled: e.target.checked })}
+                />
+                <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
+              </label>
+            </div>
+            <div className="flex items-center justify-between p-4 border border-zinc-200 rounded-xl bg-zinc-50/50">
+              <div>
+                <label className="block text-sm font-medium text-zinc-900">
+                  Highlight Saved Quotes
+                </label>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  Show a light green highlight on text you've saved to My Quotes.
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input 
+                  type="checkbox" 
+                  className="sr-only peer" 
+                  checked={localSettings.highlightSavedQuotes}
+                  onChange={(e) => setLocalSettings({ ...localSettings, highlightSavedQuotes: e.target.checked })}
                 />
                 <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
               </label>

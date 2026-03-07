@@ -60,6 +60,9 @@ export interface AppSettings {
   autoTurnPage: boolean;
   isSubtitleTranslationEnabled: boolean;
   statisticsTimeframe: 'day' | 'week' | 'month' | 'year' | 'all';
+  highlightSavedQuotes: boolean;
+  aiChunkSizeMultiplier: number;
+  aiLanguage: 'he' | 'en';
 }
 
 interface AppState {
@@ -103,6 +106,9 @@ export const useStore = create<AppState>()(
         autoTurnPage: false,
         isSubtitleTranslationEnabled: false,
         statisticsTimeframe: 'all',
+        highlightSavedQuotes: true,
+        aiChunkSizeMultiplier: 1,
+        aiLanguage: 'he',
       },
       login: (user) => set({ user }),
       logout: () => set({ user: null }),

@@ -1,7 +1,7 @@
 import { GoogleGenAI, Type, Modality } from '@google/genai';
 import { useStore } from '../store/useStore';
 
-export const analyzeBookWithAI = async (text: string, apiKey: string) => {
+export const analyzeBookWithAI = async (text: string, apiKey: string, aiLanguage: 'he' | 'en' = 'he', aiChunkSizeMultiplier: number = 1) => {
   if (!apiKey) {
     throw new Error('API Key is required for AI analysis');
   }
@@ -9,12 +9,17 @@ export const analyzeBookWithAI = async (text: string, apiKey: string) => {
   const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
   
   useStore.getState().incrementApiCallCount();
+  
+  const chunkSize = 150000 * aiChunkSizeMultiplier;
+  const langInstruction = aiLanguage === 'he' ? 'Hebrew (עברית)' : 'English';
+
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: `Analyze the following book excerpt and provide a summary, main characters, themes, a glossary of unique terms, and detect the language the book is written in.
+    IMPORTANT: The summary, characters descriptions, themes, and glossary definitions MUST be written in ${langInstruction}.
     
     Excerpt:
-    ${text.substring(0, 150000)}`,
+    ${text.substring(0, chunkSize)}`,
     config: {
       responseMimeType: 'application/json',
       responseSchema: {

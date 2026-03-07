@@ -252,7 +252,7 @@ export default function BookReader() {
       }
       setIsAnalyzingSummary(true);
       try {
-        const result = await analyzeBookWithAI(book!.content, apiKey);
+        const result = await analyzeBookWithAI(book!.content, apiKey, settings.aiLanguage, settings.aiChunkSizeMultiplier);
         if (result && result.summary) {
           setSummaryText(result.summary);
           const updatedBook = { ...book!, analysis: result };
@@ -723,6 +723,18 @@ export default function BookReader() {
 
   // Format the text for display (handle markers and highlighting)
   const renderPageContent = (text: string) => {
+    let processedText = text;
+    if (settings.highlightSavedQuotes && quotes.length > 0) {
+      // Sort quotes by length descending to avoid partial replacements of longer quotes
+      const sortedQuotes = [...quotes].sort((a, b) => b.text.length - a.text.length);
+      sortedQuotes.forEach(q => {
+        if (q.text && processedText.includes(q.text)) {
+           // Simple replace, might not handle multiple occurrences perfectly but good enough for now
+           processedText = processedText.replace(q.text, `<<QUOTE_START>>${q.text}<<QUOTE_END>>`);
+        }
+      });
+    }
+
     const getHighlightClass = () => {
       switch (settings.highlightStyle) {
         case 'underline': return 'underline decoration-yellow-400 decoration-2 underline-offset-4';
@@ -733,10 +745,11 @@ export default function BookReader() {
       }
     };
 
-    const renderRawText = (raw: string, initialBold: boolean, initialUnderline: boolean) => {
-      const parts = raw.split(/(<<BOLD_START>>|<<BOLD_END>>|<<UNDERLINE_START>>|<<UNDERLINE_END>>|<<PAGE:\d+>>|\n)/g);
+    const renderRawText = (raw: string, initialBold: boolean, initialUnderline: boolean, initialQuote: boolean = false) => {
+      const parts = raw.split(/(<<BOLD_START>>|<<BOLD_END>>|<<UNDERLINE_START>>|<<UNDERLINE_END>>|<<QUOTE_START>>|<<QUOTE_END>>|<<PAGE:\d+>>|\n)/g);
       let isBold = initialBold;
       let isUnderline = initialUnderline;
+      let isQuote = initialQuote;
       
       const nodes = parts.map((part, i) => {
         if (!part) return null;
@@ -744,39 +757,46 @@ export default function BookReader() {
         if (part === '<<BOLD_END>>') { isBold = false; return null; }
         if (part === '<<UNDERLINE_START>>') { isUnderline = true; return null; }
         if (part === '<<UNDERLINE_END>>') { isUnderline = false; return null; }
+        if (part === '<<QUOTE_START>>') { isQuote = true; return null; }
+        if (part === '<<QUOTE_END>>') { isQuote = false; return null; }
         if (part.startsWith('<<PAGE:')) return null;
         if (part === '\n') return <br key={i} />;
         
-        if (isBold && isUnderline) return <strong key={i} className="text-zinc-900"><u>{part}</u></strong>;
-        if (isBold) return <strong key={i} className="text-zinc-900">{part}</strong>;
-        if (isUnderline) return <u key={i} className="decoration-zinc-400 underline-offset-4">{part}</u>;
+        let className = "";
+        if (isBold) className += "font-bold text-zinc-900 ";
+        if (isUnderline) className += "underline decoration-zinc-400 underline-offset-4 ";
+        if (isQuote) className += "bg-green-200/60 dark:bg-green-900/40 rounded px-1 ";
+
+        if (className) {
+           return <span key={i} className={className.trim()}>{part}</span>;
+        }
         return <span key={i}>{part}</span>;
       });
       
-      return { nodes, finalBold: isBold, finalUnderline: isUnderline };
+      return { nodes, finalBold: isBold, finalUnderline: isUnderline, finalQuote: isQuote };
     };
 
     if (!isPlaying || currentSentenceIndex === null) {
-      return renderRawText(text, false, false).nodes;
+      return renderRawText(processedText, false, false, false).nodes;
     }
 
     // 1. Build clean text and a mapping from clean index to raw index
     let cleanText = '';
     const cleanToRaw: number[] = [];
     
-    const markerRegex = /(<<BOLD_START>>|<<BOLD_END>>|<<UNDERLINE_START>>|<<UNDERLINE_END>>|<<PAGE:\d+>>)/g;
+    const markerRegex = /(<<BOLD_START>>|<<BOLD_END>>|<<UNDERLINE_START>>|<<UNDERLINE_END>>|<<QUOTE_START>>|<<QUOTE_END>>|<<PAGE:\d+>>)/g;
     let rawIdx = 0;
     let match;
     
-    while ((match = markerRegex.exec(text)) !== null) {
-      const before = text.substring(rawIdx, match.index);
+    while ((match = markerRegex.exec(processedText)) !== null) {
+      const before = processedText.substring(rawIdx, match.index);
       for (let i = 0; i < before.length; i++) {
         cleanText += before[i];
         cleanToRaw.push(rawIdx + i);
       }
       rawIdx = markerRegex.lastIndex;
     }
-    const remaining = text.substring(rawIdx);
+    const remaining = processedText.substring(rawIdx);
     for (let i = 0; i < remaining.length; i++) {
       cleanText += remaining[i];
       cleanToRaw.push(rawIdx + i);
@@ -804,16 +824,16 @@ export default function BookReader() {
 
     // 3. Map clean indices back to raw indices
     const startRawIdx = cleanToRaw[startCleanIdx];
-    const endRawIdx = endCleanIdx < cleanToRaw.length ? cleanToRaw[endCleanIdx] : text.length;
+    const endRawIdx = endCleanIdx < cleanToRaw.length ? cleanToRaw[endCleanIdx] : processedText.length;
     
     // 4. Split raw text into 3 parts
-    const beforeRaw = text.substring(0, startRawIdx);
-    const highlightRaw = text.substring(startRawIdx, endRawIdx);
-    const afterRaw = text.substring(endRawIdx);
+    const beforeRaw = processedText.substring(0, startRawIdx);
+    const highlightRaw = processedText.substring(startRawIdx, endRawIdx);
+    const afterRaw = processedText.substring(endRawIdx);
     
-    const beforeRender = renderRawText(beforeRaw, false, false);
-    const highlightRender = renderRawText(highlightRaw, beforeRender.finalBold, beforeRender.finalUnderline);
-    const afterRender = renderRawText(afterRaw, highlightRender.finalBold, highlightRender.finalUnderline);
+    const beforeRender = renderRawText(beforeRaw, false, false, false);
+    const highlightRender = renderRawText(highlightRaw, beforeRender.finalBold, beforeRender.finalUnderline, beforeRender.finalQuote);
+    const afterRender = renderRawText(afterRaw, highlightRender.finalBold, highlightRender.finalUnderline, highlightRender.finalQuote);
     
     return (
       <>
@@ -878,6 +898,15 @@ export default function BookReader() {
 
       {/* Main Reader Area */}
       <div className="flex-1 overflow-hidden relative flex">
+        {isImmersive && (
+          <button 
+            onClick={() => setIsImmersive(false)}
+            className="absolute top-4 right-4 z-50 p-2 bg-black/10 hover:bg-black/20 text-black/60 hover:text-black/80 rounded-full backdrop-blur-sm transition-all shadow-sm"
+            title="Exit Immersive Mode"
+          >
+            <X size={20} />
+          </button>
+        )}
         
         {/* Left Nav */}
         <button 

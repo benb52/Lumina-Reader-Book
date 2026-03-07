@@ -55,7 +55,8 @@ export default function Library() {
 
       if (apiKey) {
         try {
-          const analysis = await analyzeBookWithAI(parsedBook.content, apiKey);
+          const settings = useStore.getState().settings;
+          const analysis = await analyzeBookWithAI(parsedBook.content, apiKey, settings.aiLanguage, settings.aiChunkSizeMultiplier);
           if (analysis) {
             newBook.analysis = analysis;
           }
@@ -130,7 +131,8 @@ export default function Library() {
 
       if (apiKey) {
         try {
-          const analysis = await analyzeBookWithAI(parsedBook.content, apiKey);
+          const settings = useStore.getState().settings;
+          const analysis = await analyzeBookWithAI(parsedBook.content, apiKey, settings.aiLanguage, settings.aiChunkSizeMultiplier);
           if (analysis) {
             newBook.analysis = analysis;
           }
