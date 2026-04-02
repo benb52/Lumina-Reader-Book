@@ -13,6 +13,7 @@ import AdminDashboard from './pages/AdminDashboard';
 import { auth } from './lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { db } from './lib/db';
+import QuotaWarning from './components/QuotaWarning';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const user = useStore((state) => state.user);
@@ -59,8 +60,10 @@ export default function App() {
   }
 
   return (
-    <BrowserRouter>
-      <Routes>
+    <>
+      <QuotaWarning />
+      <BrowserRouter>
+        <Routes>
         <Route path="/login" element={<Login />} />
         <Route
           path="/"
@@ -87,5 +90,6 @@ export default function App() {
         />
       </Routes>
     </BrowserRouter>
+    </>
   );
 }

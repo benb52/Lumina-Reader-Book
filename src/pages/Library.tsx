@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Plus, FileText, Upload, Trash2, Edit3, BookOpen, Archive, ArchiveRestore, Share2, Check, X } from 'lucide-react';
+import { Plus, FileText, Upload, Trash2, Edit3, BookOpen, Archive, ArchiveRestore, Share2, Check, X, Captions } from 'lucide-react';
 import { useStore, Book } from '../store/useStore';
 import { db } from '../lib/db';
 import { Button } from '../components/ui/Button';
@@ -430,6 +430,13 @@ export default function Library() {
               <div className="absolute -top-3 -left-2 bg-zinc-900 text-white text-[10px] font-bold px-2 py-0.5 rounded-full z-20 shadow-sm">
                 #{index + 1}
               </div>
+
+              {book.dramatization && (
+                <div className="absolute top-2 right-2 bg-emerald-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded shadow-sm z-20 flex items-center gap-1">
+                  <Captions size={10} />
+                  AI
+                </div>
+              )}
 
               {/* Book Cover/Spine */}
               <Link 

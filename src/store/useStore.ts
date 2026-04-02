@@ -14,6 +14,7 @@ export interface Book {
   content: string; // Full text with markers
   totalPages: number;
   lastReadPage: number;
+  lastReadSentenceIndex?: number;
   addedAt: number;
   isArchived?: boolean;
   language?: string;
@@ -24,6 +25,18 @@ export interface Book {
     characters: any[];
     themes: string[];
     glossary: any[];
+  };
+  dramatization?: {
+    pages: {
+      [pageIndex: number]: {
+        segments: {
+          text: string;
+          speaker: string;
+          voice: string;
+        }[];
+      };
+    };
+    speakerVoices: { [speakerName: string]: string };
   };
 }
 
@@ -63,6 +76,7 @@ export interface AppSettings {
   highlightSavedQuotes: boolean;
   aiChunkSizeMultiplier: number;
   aiLanguage: 'he' | 'en';
+  isDramatizedReadingEnabled: boolean;
 }
 
 interface AppState {
@@ -77,6 +91,8 @@ interface AppState {
   updateSettings: (updates: Partial<AppSettings>) => void;
   apiCallCount: number;
   incrementApiCallCount: () => void;
+  isWaitingForQuota: boolean;
+  setIsWaitingForQuota: (val: boolean) => void;
   vocabulary: VocabularyWord[];
   setVocabulary: (words: VocabularyWord[]) => void;
   addVocabularyWord: (word: VocabularyWord) => void;
@@ -109,6 +125,7 @@ export const useStore = create<AppState>()(
         highlightSavedQuotes: true,
         aiChunkSizeMultiplier: 1,
         aiLanguage: 'he',
+        isDramatizedReadingEnabled: false,
       },
       login: (user) => set({ user }),
       logout: () => set({ user: null }),
@@ -123,6 +140,8 @@ export const useStore = create<AppState>()(
         set((state) => ({ settings: { ...state.settings, ...updates } })),
       apiCallCount: 0,
       incrementApiCallCount: () => set((state) => ({ apiCallCount: state.apiCallCount + 1 })),
+      isWaitingForQuota: false,
+      setIsWaitingForQuota: (val) => set({ isWaitingForQuota: val }),
       vocabulary: [],
       setVocabulary: (words) => set({ vocabulary: words }),
       addVocabularyWord: (word) => set((state) => ({ vocabulary: [word, ...state.vocabulary] })),
@@ -142,3 +161,5 @@ export const useStore = create<AppState>()(
     }
   )
 );
+
+export const appStore = useStore;

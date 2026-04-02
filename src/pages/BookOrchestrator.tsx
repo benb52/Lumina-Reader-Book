@@ -1,14 +1,26 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Save, X, ChevronLeft, ChevronRight, Trash, Plus, Bold, Underline } from 'lucide-react';
+import { Save, X, ChevronLeft, ChevronRight, Trash, Plus, Bold, Underline, Sparkles, Loader2, User, Volume2, Play } from 'lucide-react';
 import { useStore, Book } from '../store/useStore';
 import { db } from '../lib/db';
 import { Button } from '../components/ui/Button';
+import { analyzeSpeakers, generateSpeech } from '../services/ai';
+import { cn } from '../lib/utils';
+
+const AVAILABLE_VOICES = [
+  { id: 'Kore', name: 'Kore', description: 'Young Female' },
+  { id: 'Zephyr', name: 'Zephyr', description: 'Calm Female' },
+  { id: 'Puck', name: 'Puck', description: 'Playful Neutral' },
+  { id: 'Charon', name: 'Charon', description: 'Mature Male' },
+  { id: 'Fenrir', name: 'Fenrir', description: 'Strong Male' },
+];
 
 export default function BookOrchestrator() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const updateBook = useStore((state) => state.updateBook);
+  const settings = useStore((state) => state.settings);
+  const apiKey = settings.apiKey;
   
   const [book, setBook] = useState<Book | null>(null);
   const [pages, setPages] = useState<string[]>([]);
@@ -21,6 +33,15 @@ export default function BookOrchestrator() {
   const [bookCoverUrl, setBookCoverUrl] = useState<string>('');
   const [bookLanguage, setBookLanguage] = useState<string>('');
   const [textDirection, setTextDirection] = useState<'ltr' | 'rtl'>('ltr');
+
+  const [isDramatizingFullBook, setIsDramatizingFullBook] = useState(false);
+  const [dramatizationProgress, setDramatizationProgress] = useState(0);
+  const [cancelDramatization, setCancelDramatization] = useState(false);
+  const [showDramatizeConfirm, setShowDramatizeConfirm] = useState(false);
+  
+  const [speakerVoices, setSpeakerVoices] = useState<{ [name: string]: string }>({});
+  const [isPreviewingVoice, setIsPreviewingVoice] = useState<string | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
   useEffect(() => {
     if (id) {
@@ -37,6 +58,13 @@ export default function BookOrchestrator() {
       setBookCoverUrl(b.coverUrl || '');
       setBookLanguage(b.language || '');
       setTextDirection(b.textDirection || 'ltr');
+      
+      const voices = b.dramatization?.speakerVoices || {};
+      if (b.dramatization && !voices['Narrator']) {
+        voices['Narrator'] = 'Zephyr';
+      }
+      setSpeakerVoices(voices);
+      
       // Split content by our marker
       const pgs = b.content.split('<<LUMINA_PAGE_BREAK>>').filter(p => p.trim() !== '');
       // Clean up <<PAGE:X>> markers for editing
@@ -114,6 +142,12 @@ export default function BookOrchestrator() {
       // Reconstruct content with markers
       const content = pages.map((p, i) => `<<PAGE:${i + 1}>>\n${p}`).join('\n<<LUMINA_PAGE_BREAK>>\n');
       
+      // Update dramatization with current speaker voices
+      const updatedDramatization = {
+        ...(book.dramatization || { pages: {} }),
+        speakerVoices: speakerVoices
+      };
+
       const updatedBook = { 
         ...book, 
         title: bookTitle,
@@ -122,7 +156,8 @@ export default function BookOrchestrator() {
         content,
         totalPages: pages.length,
         language: bookLanguage,
-        textDirection
+        textDirection,
+        dramatization: updatedDramatization
       };
       await db.saveBook(updatedBook);
       updateBook(book.id, { 
@@ -132,7 +167,8 @@ export default function BookOrchestrator() {
         content,
         totalPages: updatedBook.totalPages,
         language: bookLanguage,
-        textDirection
+        textDirection,
+        dramatization: updatedDramatization
       });
       navigate(`/book/${book.id}`);
     } catch (err) {
@@ -140,6 +176,128 @@ export default function BookOrchestrator() {
       setErrorMessage('Failed to save changes.');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const getCleanText = (text: string) => {
+    return text
+      .replace(/<<PAGE:\d+>>/g, '')
+      .replace(/<<BOLD_START>>/g, '')
+      .replace(/<<BOLD_END>>/g, '')
+      .replace(/<<UNDERLINE_START>>/g, '')
+      .replace(/<<UNDERLINE_END>>/g, '')
+      .replace(/<<QUOTE_START>>/g, '')
+      .replace(/<<QUOTE_END>>/g, '')
+      .trim();
+  };
+
+  const handleDramatizeFullBook = async (startFresh: boolean = false) => {
+    if (!book || !apiKey || pages.length === 0) {
+      if (!apiKey) setErrorMessage('API Key is required for AI analysis.');
+      return;
+    }
+    
+    setShowDramatizeConfirm(false);
+    setIsDramatizingFullBook(true);
+    setDramatizationProgress(0);
+    setCancelDramatization(false);
+    
+    let currentSpeakerVoices = startFresh ? { Narrator: 'Zephyr' } : { Narrator: 'Zephyr', ...(book.dramatization?.speakerVoices || {}) };
+    let currentPagesDramatization = startFresh ? {} : { ...(book.dramatization?.pages || {}) };
+    
+    try {
+      for (let i = 0; i < pages.length; i++) {
+        if (cancelDramatization) break;
+
+        // Skip pages that are already dramatized if not starting fresh
+        if (!startFresh && currentPagesDramatization[i]) {
+          setDramatizationProgress(Math.round(((i + 1) / pages.length) * 100));
+          continue;
+        }
+
+        const cleanText = getCleanText(pages[i]);
+        if (!cleanText.trim()) {
+           setDramatizationProgress(Math.round(((i + 1) / pages.length) * 100));
+           continue;
+        }
+
+        // Add a delay between requests to proactively avoid rate limits
+        // Increased to 5 seconds to stay within the 15 RPM free tier limit
+        if (i > 0) {
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+
+        const result = await analyzeSpeakers(cleanText, apiKey, currentSpeakerVoices);
+        if (result && result.segments) {
+          const newSpeakerVoices = { ...currentSpeakerVoices, ...(result.newSpeakerVoices || {}) };
+          currentSpeakerVoices = newSpeakerVoices;
+          setSpeakerVoices(newSpeakerVoices); // Update UI state
+
+          const segmentsWithVoices = result.segments.map((s: any) => ({
+            ...s,
+            voice: newSpeakerVoices[s.speaker] || 'Kore'
+          }));
+
+          currentPagesDramatization[i] = { segments: segmentsWithVoices };
+          
+          // Update progress
+          setDramatizationProgress(Math.round(((i + 1) / pages.length) * 100));
+
+          // Save incrementally every 5 pages
+          if ((i + 1) % 5 === 0 || i === pages.length - 1) {
+            const updatedDramatization = {
+              pages: currentPagesDramatization,
+              speakerVoices: currentSpeakerVoices
+            };
+            const updatedBook = { ...book, dramatization: updatedDramatization };
+            await db.saveBook(updatedBook);
+            updateBook(book.id, { dramatization: updatedDramatization });
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error("Full book dramatization failed", err);
+      const errorStr = JSON.stringify(err);
+      if (errorStr.includes('429') || errorStr.includes('RESOURCE_EXHAUSTED')) {
+        setErrorMessage("Gemini API rate limit reached. Please wait a moment and try again, or use a different API key.");
+      } else {
+        setErrorMessage("Failed to dramatize full book. Please check your connection and API key.");
+      }
+    } finally {
+      setIsDramatizingFullBook(false);
+      setCancelDramatization(false);
+    }
+  };
+
+  const handleVoiceChange = (speaker: string, voice: string) => {
+    setSpeakerVoices(prev => ({ ...prev, [speaker]: voice }));
+  };
+
+  const previewVoice = async (voiceName: string) => {
+    if (!apiKey) return;
+    setIsPreviewingVoice(voiceName);
+    try {
+      const text = `Hello, I am ${voiceName}. This is how I sound in the dramatized reading.`;
+      const base64Audio = await generateSpeech(text, voiceName, apiKey);
+      
+      if (base64Audio) {
+        if (!audioContextRef.current) {
+          audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+        }
+        const audioData = Uint8Array.from(atob(base64Audio), c => c.charCodeAt(0)).buffer;
+        const audioBuffer = await audioContextRef.current.decodeAudioData(audioData);
+        const source = audioContextRef.current.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(audioContextRef.current.destination);
+        source.start(0);
+        source.onended = () => setIsPreviewingVoice(null);
+      } else {
+        setIsPreviewingVoice(null);
+      }
+    } catch (err) {
+      console.error("Failed to preview voice", err);
+      setIsPreviewingVoice(null);
+      setErrorMessage("Failed to preview voice. Quota might be exceeded.");
     }
   };
 
@@ -166,6 +324,43 @@ export default function BookOrchestrator() {
             <div className="flex justify-end gap-3">
               <Button variant="outline" onClick={() => setPageToDelete(false)}>Cancel</Button>
               <Button onClick={confirmDeletePage} className="bg-red-600 hover:bg-red-700 text-white border-transparent">Delete</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDramatizeConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4">
+          <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full mx-auto">
+            <div className="bg-purple-100 text-purple-600 w-12 h-12 rounded-xl flex items-center justify-center mb-6">
+              <Sparkles size={24} />
+            </div>
+            <h3 className="text-2xl font-bold text-zinc-900 mb-2">AI Dramatization</h3>
+            <p className="text-zinc-600 mb-8 leading-relaxed">
+              AI will analyze the entire book to identify characters and assign professional voices. 
+              How would you like to proceed?
+            </p>
+            <div className="flex flex-col gap-3">
+              <Button 
+                onClick={() => handleDramatizeFullBook(false)}
+                className="bg-purple-600 hover:bg-purple-700 text-white border-transparent py-6 rounded-2xl"
+              >
+                Continue with Existing Voices
+              </Button>
+              <Button 
+                variant="outline"
+                onClick={() => handleDramatizeFullBook(true)}
+                className="border-zinc-200 text-zinc-600 hover:bg-zinc-50 py-6 rounded-2xl"
+              >
+                Start Fresh (Reset All Voices)
+              </Button>
+              <Button 
+                variant="ghost" 
+                onClick={() => setShowDramatizeConfirm(false)}
+                className="text-zinc-400 mt-2"
+              >
+                Cancel
+              </Button>
             </div>
           </div>
         </div>
@@ -203,6 +398,17 @@ export default function BookOrchestrator() {
               className="px-3 py-1.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900"
             />
           </div>
+          <Button 
+            variant="outline" 
+            onClick={() => setShowDramatizeConfirm(true)} 
+            disabled={isDramatizingFullBook || isSaving}
+            className={cn(
+              "flex-1 sm:flex-none justify-center border-purple-200 text-purple-700 hover:bg-purple-50",
+              isDramatizingFullBook && "animate-pulse"
+            )}
+          >
+            <Sparkles size={16} className="mr-2" /> Dramatize Book (AI)
+          </Button>
           <Button variant="outline" onClick={() => navigate(`/book/${book.id}`)} className="flex-1 sm:flex-none justify-center">
             <X size={16} className="mr-2" /> Cancel
           </Button>
@@ -251,6 +457,54 @@ export default function BookOrchestrator() {
           </div>
         </div>
 
+        <div className="bg-white rounded-2xl shadow-sm border border-zinc-200 p-4 shrink-0">
+          <h2 className="text-sm font-semibold text-zinc-900 mb-3 flex items-center gap-2">
+            <User size={16} className="text-purple-600" /> Character Voices
+          </h2>
+          {Object.keys(speakerVoices).length === 0 ? (
+            <div className="text-center py-6 bg-zinc-50 rounded-xl border border-dashed border-zinc-200">
+              <p className="text-sm text-zinc-500">No characters detected yet. Run "Dramatize Book (AI)" to identify characters.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {Object.entries(speakerVoices).map(([speaker, voice]) => {
+                const currentVoice = voice as string;
+                return (
+                  <div key={speaker} className="flex items-center justify-between p-3 bg-zinc-50 rounded-xl border border-zinc-100 group">
+                    <div className="flex flex-col min-w-0">
+                      <span className="text-xs font-bold text-zinc-900 truncate">{speaker}</span>
+                      <div className="flex items-center gap-1 mt-1">
+                        <select
+                          value={currentVoice}
+                          onChange={(e) => handleVoiceChange(speaker, e.target.value)}
+                          className="text-[11px] bg-transparent border-none p-0 focus:ring-0 text-zinc-500 cursor-pointer hover:text-purple-600 transition-colors"
+                        >
+                          {AVAILABLE_VOICES.map(v => (
+                            <option key={v.id} value={v.id}>{v.name} ({v.description})</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => previewVoice(currentVoice)}
+                      disabled={isPreviewingVoice === currentVoice}
+                      className="h-8 w-8 p-0 rounded-lg bg-white shadow-sm border border-zinc-100 hover:bg-purple-50 hover:text-purple-600 transition-all"
+                    >
+                      {isPreviewingVoice === currentVoice ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <Volume2 size={14} />
+                      )}
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         <div className="bg-white rounded-2xl shadow-sm border border-zinc-200 flex-1 flex flex-col min-h-[70vh]">
           <div className="p-3 bg-zinc-50 border-b border-zinc-200 flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2">
@@ -293,6 +547,40 @@ export default function BookOrchestrator() {
             spellCheck={false}
             placeholder="Enter page content here..."
           />
+
+          {isDramatizingFullBook && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+              <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full text-center">
+                <div className="bg-purple-100 text-purple-600 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6 animate-bounce">
+                  <Sparkles size={32} />
+                </div>
+                <h3 className="text-2xl font-bold text-zinc-900 mb-2">Dramatizing Book</h3>
+                <p className="text-zinc-500 mb-8">
+                  AI is analyzing characters and assigning professional voices. 
+                  We're moving slowly to stay within API limits. This may take a few minutes...
+                </p>
+                
+                <div className="w-full bg-zinc-100 h-3 rounded-full overflow-hidden mb-4">
+                  <div 
+                    className="bg-purple-600 h-full transition-all duration-500 ease-out"
+                    style={{ width: `${dramatizationProgress}%` }}
+                  />
+                </div>
+                <div className="flex justify-between text-sm font-medium text-zinc-600 mb-8">
+                  <span>Progress</span>
+                  <span>{dramatizationProgress}%</span>
+                </div>
+
+                <Button 
+                  variant="outline" 
+                  onClick={() => setCancelDramatization(true)}
+                  className="w-full py-6 rounded-2xl border-zinc-200 text-zinc-600 hover:bg-zinc-50"
+                >
+                  Cancel Analysis
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

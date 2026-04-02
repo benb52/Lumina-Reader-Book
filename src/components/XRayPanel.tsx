@@ -1,19 +1,24 @@
-import { X, Zap, User, MapPin, BookOpen } from 'lucide-react';
+import { X, Zap, User, MapPin, BookOpen, Sparkles } from 'lucide-react';
 import { Button } from './ui/Button';
 
 interface XRayData {
   characters: { name: string; role: string; description: string }[];
   themes: string[];
   glossary: { term: string; definition: string }[];
+  speakerVoices?: { [name: string]: string };
 }
 
 export default function XRayPanel({ 
   data, 
-  onClose 
+  onClose,
+  onUpdateVoice
 }: { 
   data?: XRayData, 
-  onClose: () => void 
+  onClose: () => void,
+  onUpdateVoice?: (name: string, voice: string) => void
 }) {
+  const voices = ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr', 'Aoede'];
+
   return (
     <div className="absolute top-0 right-0 h-full w-80 bg-white border-l border-zinc-200 shadow-xl flex flex-col z-40 animate-in slide-in-from-right">
       <div className="p-4 border-b border-zinc-200 flex items-center justify-between bg-zinc-50">
@@ -33,6 +38,28 @@ export default function XRayPanel({
           </div>
         ) : (
           <>
+            {data.speakerVoices && Object.keys(data.speakerVoices).length > 0 && (
+              <section>
+                <h3 className="text-sm font-semibold text-zinc-900 uppercase tracking-wider mb-3 flex items-center gap-2">
+                  <Sparkles size={16} className="text-emerald-500" /> Cast & Voices
+                </h3>
+                <div className="space-y-2">
+                  {Object.entries(data.speakerVoices).map(([name, voice]) => (
+                    <div key={name} className="flex items-center justify-between bg-emerald-50/50 p-2 rounded-lg border border-emerald-100">
+                      <span className="text-xs font-medium text-zinc-900">{name}</span>
+                      <select 
+                        value={voice || 'Kore'} 
+                        onChange={(e) => onUpdateVoice?.(name, e.target.value)}
+                        className="text-[10px] bg-white border border-emerald-200 rounded px-1 py-0.5 outline-none focus:ring-1 focus:ring-emerald-500"
+                      >
+                        {voices.map(v => <option key={v} value={v}>{v}</option>)}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
             <section>
               <h3 className="text-sm font-semibold text-zinc-900 uppercase tracking-wider mb-3 flex items-center gap-2">
                 <User size={16} className="text-zinc-400" /> Characters

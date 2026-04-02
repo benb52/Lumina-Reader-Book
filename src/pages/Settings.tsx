@@ -188,7 +188,7 @@ export default function Settings() {
               <div className="relative">
                 <input
                   type={showApiKey ? "text" : "password"}
-                  value={localSettings.apiKey}
+                  value={localSettings.apiKey || ''}
                   onChange={(e) => setLocalSettings({ ...localSettings, apiKey: e.target.value.trim() })}
                   className="w-full px-4 py-2.5 pr-12 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900"
                   placeholder="AIzaSy..."
@@ -212,7 +212,7 @@ export default function Settings() {
                   AI Features Language
                 </label>
                 <select
-                  value={localSettings.aiLanguage}
+                  value={localSettings.aiLanguage || 'he'}
                   onChange={(e) => setLocalSettings({ ...localSettings, aiLanguage: e.target.value as 'he' | 'en' })}
                   className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white"
                 >
@@ -229,7 +229,7 @@ export default function Settings() {
                   AI Context Size (Save API Calls)
                 </label>
                 <select
-                  value={localSettings.aiChunkSizeMultiplier}
+                  value={localSettings.aiChunkSizeMultiplier || 1}
                   onChange={(e) => setLocalSettings({ ...localSettings, aiChunkSizeMultiplier: parseInt(e.target.value) })}
                   className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white"
                 >
@@ -260,7 +260,7 @@ export default function Settings() {
                 Font Family
               </label>
               <select
-                value={localSettings.fontFamily}
+                value={localSettings.fontFamily || 'serif'}
                 onChange={(e) => setLocalSettings({ ...localSettings, fontFamily: e.target.value })}
                 className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white"
               >
@@ -278,7 +278,7 @@ export default function Settings() {
                 type="range"
                 min="12"
                 max="32"
-                value={localSettings.fontSize}
+                value={localSettings.fontSize || 18}
                 onChange={(e) => setLocalSettings({ ...localSettings, fontSize: parseInt(e.target.value) })}
                 className="w-full mt-2"
               />
@@ -289,7 +289,7 @@ export default function Settings() {
                 Highlight Style (During TTS)
               </label>
               <select
-                value={localSettings.highlightStyle}
+                value={localSettings.highlightStyle || 'yellow-bg'}
                 onChange={(e) => setLocalSettings({ ...localSettings, highlightStyle: e.target.value as any })}
                 className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white"
               >
@@ -305,7 +305,7 @@ export default function Settings() {
                 TTS Provider
               </label>
               <select
-                value={localSettings.ttsProvider}
+                value={localSettings.ttsProvider || 'browser'}
                 onChange={(e) => setLocalSettings({ ...localSettings, ttsProvider: e.target.value as any })}
                 className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white"
               >
@@ -317,13 +317,13 @@ export default function Settings() {
               )}
             </div>
 
-            {localSettings.ttsProvider === 'gemini' && (
+            {localSettings.ttsProvider === 'gemini' && !localSettings.isDramatizedReadingEnabled && (
               <div>
                 <label className="block text-sm font-medium text-zinc-700 mb-1">
                   Gemini Voice
                 </label>
                 <select
-                  value={localSettings.geminiVoice}
+                  value={localSettings.geminiVoice || 'Kore'}
                   onChange={(e) => setLocalSettings({ ...localSettings, geminiVoice: e.target.value as any })}
                   className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white"
                 >
@@ -332,7 +332,6 @@ export default function Settings() {
                   <option value="Kore">Kore</option>
                   <option value="Fenrir">Fenrir</option>
                   <option value="Zephyr">Zephyr</option>
-                  <option value="Aoede">Aoede</option>
                 </select>
               </div>
             )}
@@ -346,7 +345,7 @@ export default function Settings() {
                 min="0.5"
                 max="2.5"
                 step="0.1"
-                value={localSettings.ttsSpeed}
+                value={localSettings.ttsSpeed || 1.0}
                 onChange={(e) => setLocalSettings({ ...localSettings, ttsSpeed: parseFloat(e.target.value) })}
                 className="w-full mt-2"
               />
@@ -357,7 +356,7 @@ export default function Settings() {
                 Subtitle Language
               </label>
               <select
-                value={localSettings.subtitleLanguage}
+                value={localSettings.subtitleLanguage || 'Hebrew'}
                 onChange={(e) => setLocalSettings({ ...localSettings, subtitleLanguage: e.target.value })}
                 className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white"
               >
@@ -384,7 +383,7 @@ export default function Settings() {
                 <input 
                   type="checkbox" 
                   className="sr-only peer" 
-                  checked={localSettings.autoTurnPage}
+                  checked={!!localSettings.autoTurnPage}
                   onChange={(e) => setLocalSettings({ ...localSettings, autoTurnPage: e.target.checked })}
                 />
                 <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
@@ -404,7 +403,7 @@ export default function Settings() {
                 <input 
                   type="checkbox" 
                   className="sr-only peer" 
-                  checked={localSettings.isSubtitleTranslationEnabled}
+                  checked={!!localSettings.isSubtitleTranslationEnabled}
                   onChange={(e) => setLocalSettings({ ...localSettings, isSubtitleTranslationEnabled: e.target.checked })}
                 />
                 <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
@@ -423,8 +422,28 @@ export default function Settings() {
                 <input 
                   type="checkbox" 
                   className="sr-only peer" 
-                  checked={localSettings.highlightSavedQuotes}
+                  checked={!!localSettings.highlightSavedQuotes}
                   onChange={(e) => setLocalSettings({ ...localSettings, highlightSavedQuotes: e.target.checked })}
+                />
+                <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
+              </label>
+            </div>
+
+            <div className="flex items-center justify-between p-4 border border-zinc-200 rounded-xl bg-zinc-50/50">
+              <div>
+                <label className="block text-sm font-medium text-zinc-900">
+                  Dramatized Reading (AI)
+                </label>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  Use different voices for different characters (Requires AI analysis per page).
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input 
+                  type="checkbox" 
+                  className="sr-only peer" 
+                  checked={!!localSettings.isDramatizedReadingEnabled}
+                  onChange={(e) => setLocalSettings({ ...localSettings, isDramatizedReadingEnabled: e.target.checked })}
                 />
                 <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
               </label>
@@ -448,7 +467,7 @@ export default function Settings() {
             <input
               type="number"
               min="1"
-              value={localSettings.dailyGoalPages}
+              value={localSettings.dailyGoalPages || 30}
               onChange={(e) => setLocalSettings({ ...localSettings, dailyGoalPages: parseInt(e.target.value) })}
               className="w-full md:w-1/2 px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900"
             />
