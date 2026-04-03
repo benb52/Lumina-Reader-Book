@@ -6,12 +6,23 @@ class RateLimiter {
   private queue: (() => Promise<void>)[] = [];
   private processing = false;
   private lastRequestTime = 0;
-  private minInterval = 4500; // ~13 requests per minute (safe for 15 RPM limit)
+  private minInterval = 15000; // 4 requests per minute (extremely safe for 15 RPM limit)
+  private pausedUntil = 0;
 
   async schedule<T>(fn: () => Promise<T>): Promise<T> {
     return new Promise((resolve, reject) => {
       this.queue.push(async () => {
-        const now = Date.now();
+        let now = Date.now();
+        
+        // 1. Global pause check (e.g. after a 429)
+        if (now < this.pausedUntil) {
+          const pauseDuration = this.pausedUntil - now;
+          console.log(`[RateLimiter] Paused. Waiting ${Math.round(pauseDuration/1000)}s...`);
+          await new Promise(r => setTimeout(r, pauseDuration));
+          now = Date.now();
+        }
+
+        // 2. Minimum interval check
         const timeSinceLast = now - this.lastRequestTime;
         if (timeSinceLast < this.minInterval) {
           await new Promise(r => setTimeout(r, this.minInterval - timeSinceLast));
@@ -21,7 +32,18 @@ class RateLimiter {
           this.lastRequestTime = Date.now();
           const result = await fn();
           resolve(result);
-        } catch (error) {
+        } catch (error: any) {
+          const errorStr = (error?.message || JSON.stringify(error)).toLowerCase();
+          const isRateLimit = errorStr.includes('429') || 
+                              errorStr.includes('resource_exhausted') || 
+                              errorStr.includes('quota') ||
+                              errorStr.includes('limit');
+          
+          if (isRateLimit) {
+            // If we hit a rate limit, pause the entire limiter for 30 seconds
+            this.pausedUntil = Date.now() + 30000;
+            console.warn(`[RateLimiter] Quota hit. Pausing all requests for 30s.`);
+          }
           reject(error);
         }
       });
@@ -42,7 +64,7 @@ class RateLimiter {
 
 const limiter = new RateLimiter();
 
-export const withRetry = async <T>(fn: () => Promise<T>, maxRetries = 5, initialDelay = 6000): Promise<T> => {
+export const withRetry = async <T>(fn: () => Promise<T>, maxRetries = 7, initialDelay = 30000): Promise<T> => {
   let retries = 0;
   while (true) {
     try {
@@ -58,11 +80,20 @@ export const withRetry = async <T>(fn: () => Promise<T>, maxRetries = 5, initial
                           errorStr.includes('limit') ||
                           errorStr.includes('reached');
       
-      if (isRateLimit && retries < maxRetries) {
+      const isTransientError = errorStr.includes('500') || 
+                               errorStr.includes('internal error') || 
+                               errorStr.includes('service_unavailable') ||
+                               errorStr.includes('503');
+
+      // Check for potential daily limit (often mentions "daily" or "day")
+      const isDailyLimit = errorStr.includes('daily') || errorStr.includes('day');
+
+      if ((isRateLimit || isTransientError) && retries < maxRetries && !isDailyLimit) {
         appStore.getState().setIsWaitingForQuota(true);
-        // Increase delay exponentially, but start higher for quota errors (8 seconds)
-        const delay = (initialDelay + 2000) * Math.pow(2, retries);
-        console.warn(`[${new Date().toLocaleTimeString()}] Gemini API Quota reached. Retrying in ${Math.round(delay/1000)}s... (Attempt ${retries + 1}/${maxRetries})`);
+        // Increase delay exponentially, starting at 20s
+        const delay = initialDelay * Math.pow(1.5, retries);
+        const errorType = isRateLimit ? 'Quota' : 'Transient Server Error';
+        console.warn(`[${new Date().toLocaleTimeString()}] Gemini API ${errorType} reached. Retrying in ${Math.round(delay/1000)}s... (Attempt ${retries + 1}/${maxRetries})`);
         
         await new Promise(resolve => setTimeout(resolve, delay));
         retries++;
@@ -70,9 +101,13 @@ export const withRetry = async <T>(fn: () => Promise<T>, maxRetries = 5, initial
       }
       
       appStore.getState().setIsWaitingForQuota(false);
-      // If we've exhausted retries or it's not a rate limit error
+      
+      if (isDailyLimit) {
+        throw new Error('Gemini API daily quota reached. Please try again tomorrow or use a different API key.');
+      }
+
       if (isRateLimit) {
-        throw new Error('Gemini API quota exceeded after multiple retries. Please wait a few minutes before trying again.');
+        throw new Error('Gemini API quota exceeded after multiple retries. Your progress has been saved. Please wait a few minutes and try again.');
       }
       throw error;
     }
@@ -88,7 +123,7 @@ export const analyzeBookWithAI = async (text: string, apiKey: string, aiLanguage
   
   appStore.getState().incrementApiCallCount();
   
-  const chunkSize = 150000 * aiChunkSizeMultiplier;
+  const chunkSize = 50000 * aiChunkSizeMultiplier;
   const langInstruction = aiLanguage === 'he' ? 'Hebrew (עברית)' : 'English';
 
   const response = await withRetry(() => ai.models.generateContent({
@@ -210,6 +245,82 @@ export const getDefinition = async (word: string, context: string, apiKey: strin
     contents: `Define the word "${word}" in the context of this sentence: "${context}". Keep it brief.`,
   }));
   return response.text || '';
+};
+
+export const analyzeSpeakersBatch = async (pages: { index: number, text: string }[], apiKey: string, existingSpeakerVoices: { [name: string]: string } = {}) => {
+  if (!apiKey) throw new Error('API Key required.');
+  const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
+  appStore.getState().incrementApiCallCount();
+
+  const formattedPages = pages.map(p => `--- PAGE START: ${p.index} ---\n${p.text}\n--- PAGE END: ${p.index} ---`).join('\n\n');
+
+  const response = await withRetry(() => ai.models.generateContent({
+    model: 'gemini-3.1-flash-lite-preview',
+    contents: `Analyze the following book pages professionally. Break them down into segments and identify who is speaking each segment.
+    
+    GUIDELINES:
+    1. If it's the narrator, the speaker is "Narrator".
+    2. If it's a character, use their full name as mentioned in the text.
+    3. Be very precise about where a character starts and ends their speech.
+    4. For any NEW characters found (including "Narrator" if not in the list below), assign a voice from this list: ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr'].
+    5. Match the voice to the character's gender, age, and personality:
+       - 'Kore': Young/High-pitched female.
+       - 'Charon': Deep/Mature male.
+       - 'Puck': Playful/Gender-neutral or young.
+       - 'Fenrir': Gruff/Strong male.
+       - 'Zephyr': Soft/Calm female.
+    6. "Narrator" should usually be 'Zephyr' (calm female) or 'Charon' (mature male) unless context suggests otherwise.
+    7. Ensure the most dominant characters get unique voices if possible.
+    8. If multiple characters must share a voice, ensure they are not in the same scene together.
+    9. IMPORTANT: Group the segments by the page index provided in the markers.
+    
+    Existing character voices to maintain consistency: ${JSON.stringify({ Narrator: 'Zephyr', ...existingSpeakerVoices })}
+    
+    Text:
+    ${formattedPages}
+    
+    Return a JSON object with:
+    1. "pages": array of objects, each with "pageIndex" (number) and "segments" (array of { text: string, speaker: string })
+    2. "newSpeakerVoices": object mapping character names to suggested voices.
+    `,
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          pages: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                pageIndex: { type: Type.NUMBER },
+                segments: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      text: { type: Type.STRING },
+                      speaker: { type: Type.STRING },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          newSpeakerVoices: {
+            type: Type.OBJECT,
+          },
+        },
+      },
+    },
+  }));
+
+  try {
+    return JSON.parse(response.text || '{}');
+  } catch (e) {
+    console.error('Failed to parse batch speaker analysis', e);
+    return {};
+  }
 };
 
 export const analyzeSpeakers = async (text: string, apiKey: string, existingSpeakerVoices: { [name: string]: string } = {}) => {
@@ -380,43 +491,58 @@ export const generateMultiSpeakerSpeech = async (
     });
 
     appStore.getState().incrementApiCallCount();
-    const response = await withRetry(() => ai.models.generateContent({
-      model: 'gemini-2.5-flash-preview-tts',
-      contents: [{ parts: [{ text: prompt }] }],
-      config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig: {
-          multiSpeakerVoiceConfig: {
-            speakerVoiceConfigs
+    try {
+      const response = await withRetry(() => ai.models.generateContent({
+        model: 'gemini-2.5-flash-preview-tts',
+        contents: [{ parts: [{ text: prompt }] }],
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            multiSpeakerVoiceConfig: {
+              speakerVoiceConfigs
+            }
           }
         }
-      }
-    }));
+      }));
 
-    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (!base64Audio) {
-      console.error('Gemini Multi-Speaker TTS Response:', response);
-      throw new Error('Failed to generate audio for chunk.');
+      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (!base64Audio) {
+        console.error('Gemini Multi-Speaker TTS Response:', response);
+        throw new Error('Failed to generate audio for chunk.');
+      }
+      return base64Audio;
+    } catch (error: any) {
+      console.warn('Multi-speaker TTS failed, falling back to single speaker for this chunk', error);
+      // Fallback: join all text and use the first speaker's voice
+      const text = chunkSegments.map(s => s.text).join(' ');
+      const voice = chunkSegments[0]?.voice || 'Kore';
+      return generateSpeech(text, voice, apiKey);
     }
-    return base64Audio;
   };
 
-  // Split segments into chunks that have at most 2 unique speakers
+  // Split segments into chunks that have at most 2 unique speakers AND are not too long
   const chunks: { text: string; speaker: string; voice: string; originalIdx: number }[][] = [];
   let currentChunk: { text: string; speaker: string; voice: string; originalIdx: number }[] = [];
   let currentSpeakers = new Set<string>();
+  let currentLength = 0;
+  const MAX_CHUNK_LENGTH = 1000; // Limit text length per TTS request
 
   finalSegments.forEach((segment, idx) => {
     const nextSpeakers = new Set(currentSpeakers);
     nextSpeakers.add(segment.speaker);
+    const nextLength = currentLength + segment.text.length;
 
-    if (nextSpeakers.size > 2) {
-      chunks.push(currentChunk);
+    if (nextSpeakers.size > 2 || nextLength > MAX_CHUNK_LENGTH) {
+      if (currentChunk.length > 0) {
+        chunks.push(currentChunk);
+      }
       currentChunk = [{ ...segment, originalIdx: idx }];
       currentSpeakers = new Set([segment.speaker]);
+      currentLength = segment.text.length;
     } else {
       currentChunk.push({ ...segment, originalIdx: idx });
       currentSpeakers = nextSpeakers;
+      currentLength = nextLength;
     }
   });
   if (currentChunk.length > 0) chunks.push(currentChunk);
@@ -440,7 +566,21 @@ export const generateMultiSpeakerSpeech = async (
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
       
       try {
-        const buffer = await tempCtx.decodeAudioData(bytes.buffer.slice(0));
+        // Gemini TTS returns raw 16-bit PCM Mono at 24kHz.
+        // decodeAudioData expects a container (WAV/MP3), so we decode manually.
+        const int16 = new Int16Array(bytes.buffer);
+        const float32 = new Float32Array(int16.length);
+        for (let i = 0; i < int16.length; i++) {
+          float32[i] = int16[i] / 32768.0;
+        }
+        
+        const buffer = new AudioBuffer({
+          length: float32.length,
+          numberOfChannels: 1,
+          sampleRate: 24000
+        });
+        buffer.copyToChannel(float32, 0);
+        
         const chunkDuration = buffer.duration;
         
         // Distribute chunk duration among segments in the chunk based on character count

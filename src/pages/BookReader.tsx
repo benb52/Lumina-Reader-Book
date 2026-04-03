@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Play, Pause, SkipBack, SkipForward, Settings as SettingsIcon, X, BookOpen, Languages, Search, ChevronLeft, ChevronRight, MessageSquare, Zap, Highlighter, Captions, Sparkles, Moon, Sun } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Settings as SettingsIcon, X, BookOpen, Languages, Search, ChevronLeft, ChevronRight, MessageSquare, Zap, Highlighter, Captions, Sparkles, Moon, Sun, Loader2 } from 'lucide-react';
 import { useStore, Book } from '../store/useStore';
 import { db } from '../lib/db';
 import { Button } from '../components/ui/Button';
@@ -120,6 +120,7 @@ export default function BookReader() {
   const [isTurningPage, setIsTurningPage] = useState(false);
   const pageStartTimeRef = useRef<number>(Date.now());
 
+  const isWaitingForQuota = useStore((state) => state.isWaitingForQuota);
   const settings = useStore((state) => state.settings);
   const updateBook = useStore((state) => state.updateBook);
   const updateSettings = useStore((state) => state.updateSettings);
@@ -1104,6 +1105,13 @@ export default function BookReader() {
       "flex flex-col h-full transition-all duration-300 relative",
       isImmersive ? "bg-[#f5f5f0]" : settings.theme === 'dark' ? "bg-zinc-900 text-zinc-100" : "bg-zinc-50 text-zinc-900"
     )}>
+      {isWaitingForQuota && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 p-3 bg-amber-50 text-amber-800 rounded-xl border border-amber-200 flex items-center gap-3 shadow-lg animate-in fade-in slide-in-from-top-2">
+          <Loader2 size={18} className="animate-spin text-amber-600" />
+          <span className="text-sm font-medium">Gemini API quota reached. Waiting to resume...</span>
+        </div>
+      )}
+
       {errorMessage && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 p-4 bg-red-50 text-red-700 rounded-xl border border-red-200 flex justify-between items-center shadow-lg min-w-[300px]">
           <span>{errorMessage}</span>

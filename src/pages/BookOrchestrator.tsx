@@ -4,7 +4,7 @@ import { Save, X, ChevronLeft, ChevronRight, Trash, Plus, Bold, Underline, Spark
 import { useStore, Book } from '../store/useStore';
 import { db } from '../lib/db';
 import { Button } from '../components/ui/Button';
-import { analyzeSpeakers, generateSpeech } from '../services/ai';
+import { analyzeSpeakers, analyzeSpeakersBatch, generateSpeech } from '../services/ai';
 import { cn } from '../lib/utils';
 
 const AVAILABLE_VOICES = [
@@ -19,6 +19,7 @@ export default function BookOrchestrator() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const updateBook = useStore((state) => state.updateBook);
+  const isWaitingForQuota = useStore((state) => state.isWaitingForQuota);
   const settings = useStore((state) => state.settings);
   const apiKey = settings.apiKey;
   
@@ -37,6 +38,7 @@ export default function BookOrchestrator() {
   const [isDramatizingFullBook, setIsDramatizingFullBook] = useState(false);
   const [dramatizationProgress, setDramatizationProgress] = useState(0);
   const [cancelDramatization, setCancelDramatization] = useState(false);
+  const cancelRef = useRef(false);
   const [showDramatizeConfirm, setShowDramatizeConfirm] = useState(false);
   
   const [speakerVoices, setSpeakerVoices] = useState<{ [name: string]: string }>({});
@@ -201,67 +203,75 @@ export default function BookOrchestrator() {
     setIsDramatizingFullBook(true);
     setDramatizationProgress(0);
     setCancelDramatization(false);
+    cancelRef.current = false;
     
     let currentSpeakerVoices = startFresh ? { Narrator: 'Zephyr' } : { Narrator: 'Zephyr', ...(book.dramatization?.speakerVoices || {}) };
     let currentPagesDramatization = startFresh ? {} : { ...(book.dramatization?.pages || {}) };
     
-    try {
-      for (let i = 0; i < pages.length; i++) {
-        if (cancelDramatization) break;
+    const BATCH_SIZE = 5;
 
-        // Skip pages that are already dramatized if not starting fresh
-        if (!startFresh && currentPagesDramatization[i]) {
-          setDramatizationProgress(Math.round(((i + 1) / pages.length) * 100));
+    try {
+      for (let i = 0; i < pages.length; i += BATCH_SIZE) {
+        if (cancelRef.current) break;
+
+        const batchPages: { index: number, text: string }[] = [];
+        for (let j = 0; j < BATCH_SIZE && (i + j) < pages.length; j++) {
+          const pageIdx = i + j;
+          // Skip pages that are already dramatized if not starting fresh
+          if (!startFresh && currentPagesDramatization[pageIdx]) {
+            continue;
+          }
+          const cleanText = getCleanText(pages[pageIdx]);
+          if (cleanText.trim()) {
+            batchPages.push({ index: pageIdx, text: cleanText });
+          }
+        }
+
+        if (batchPages.length === 0) {
+          setDramatizationProgress(Math.min(100, Math.round(((i + BATCH_SIZE) / pages.length) * 100)));
           continue;
         }
 
-        const cleanText = getCleanText(pages[i]);
-        if (!cleanText.trim()) {
-           setDramatizationProgress(Math.round(((i + 1) / pages.length) * 100));
-           continue;
-        }
-
         // Add a delay between requests to proactively avoid rate limits
-        // Increased to 5 seconds to stay within the 15 RPM free tier limit
+        // Since we are batching 5 pages, we can wait 5 seconds (12 RPM)
         if (i > 0) {
           await new Promise(resolve => setTimeout(resolve, 5000));
         }
 
-        const result = await analyzeSpeakers(cleanText, apiKey, currentSpeakerVoices);
-        if (result && result.segments) {
+        const result = await analyzeSpeakersBatch(batchPages, apiKey, currentSpeakerVoices);
+        
+        if (result && result.pages) {
           const newSpeakerVoices = { ...currentSpeakerVoices, ...(result.newSpeakerVoices || {}) };
           currentSpeakerVoices = newSpeakerVoices;
-          setSpeakerVoices(newSpeakerVoices); // Update UI state
+          setSpeakerVoices(newSpeakerVoices);
 
-          const segmentsWithVoices = result.segments.map((s: any) => ({
-            ...s,
-            voice: newSpeakerVoices[s.speaker] || 'Kore'
-          }));
+          result.pages.forEach((pageData: any) => {
+            const segmentsWithVoices = pageData.segments.map((s: any) => ({
+              ...s,
+              voice: newSpeakerVoices[s.speaker] || 'Kore'
+            }));
+            currentPagesDramatization[pageData.pageIndex] = { segments: segmentsWithVoices };
+          });
 
-          currentPagesDramatization[i] = { segments: segmentsWithVoices };
-          
-          // Update progress
-          setDramatizationProgress(Math.round(((i + 1) / pages.length) * 100));
-
-          // Save incrementally every 5 pages
-          if ((i + 1) % 5 === 0 || i === pages.length - 1) {
-            const updatedDramatization = {
-              pages: currentPagesDramatization,
-              speakerVoices: currentSpeakerVoices
-            };
-            const updatedBook = { ...book, dramatization: updatedDramatization };
-            await db.saveBook(updatedBook);
-            updateBook(book.id, { dramatization: updatedDramatization });
-          }
+          // Save incrementally after EVERY batch
+          const updatedDramatization = {
+            pages: currentPagesDramatization,
+            speakerVoices: currentSpeakerVoices
+          };
+          const updatedBook = { ...book, dramatization: updatedDramatization };
+          await db.saveBook(updatedBook);
+          updateBook(book.id, { dramatization: updatedDramatization });
         }
+        
+        setDramatizationProgress(Math.min(100, Math.round(((i + BATCH_SIZE) / pages.length) * 100)));
       }
     } catch (err: any) {
       console.error("Full book dramatization failed", err);
-      const errorStr = JSON.stringify(err);
-      if (errorStr.includes('429') || errorStr.includes('RESOURCE_EXHAUSTED')) {
-        setErrorMessage("Gemini API rate limit reached. Please wait a moment and try again, or use a different API key.");
+      const errorStr = (err?.message || JSON.stringify(err)).toLowerCase();
+      if (errorStr.includes('429') || errorStr.includes('resource_exhausted') || errorStr.includes('quota')) {
+        setErrorMessage("Gemini API quota exceeded. Progress has been saved. You can resume later by clicking 'Dramatize Full Book' again.");
       } else {
-        setErrorMessage("Failed to dramatize full book. Please check your connection and API key.");
+        setErrorMessage("Failed to dramatize full book. Progress has been saved. Please check your connection and try again.");
       }
     } finally {
       setIsDramatizingFullBook(false);
@@ -284,8 +294,19 @@ export default function BookOrchestrator() {
         if (!audioContextRef.current) {
           audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
         }
-        const audioData = Uint8Array.from(atob(base64Audio), c => c.charCodeAt(0)).buffer;
-        const audioBuffer = await audioContextRef.current.decodeAudioData(audioData);
+        const audioData = Uint8Array.from(atob(base64Audio), c => c.charCodeAt(0));
+        
+        // Gemini TTS returns raw 16-bit PCM Mono at 24kHz.
+        // decodeAudioData expects a container (WAV/MP3), so we decode manually.
+        const int16 = new Int16Array(audioData.buffer);
+        const float32 = new Float32Array(int16.length);
+        for (let i = 0; i < int16.length; i++) {
+          float32[i] = int16[i] / 32768.0;
+        }
+        
+        const audioBuffer = audioContextRef.current.createBuffer(1, float32.length, 24000);
+        audioBuffer.copyToChannel(float32, 0);
+        
         const source = audioContextRef.current.createBufferSource();
         source.buffer = audioBuffer;
         source.connect(audioContextRef.current.destination);
@@ -556,8 +577,14 @@ export default function BookOrchestrator() {
                 </div>
                 <h3 className="text-2xl font-bold text-zinc-900 mb-2">Dramatizing Book</h3>
                 <p className="text-zinc-500 mb-8">
-                  AI is analyzing characters and assigning professional voices. 
-                  We're moving slowly to stay within API limits. This may take a few minutes...
+                  {isWaitingForQuota ? (
+                    <span className="text-amber-600 font-medium flex items-center justify-center gap-2">
+                      <Loader2 size={16} className="animate-spin" />
+                      Gemini API quota reached. Waiting to resume...
+                    </span>
+                  ) : (
+                    "AI is analyzing characters and assigning professional voices. We're moving slowly to stay within API limits. This may take some time depending on the book length..."
+                  )}
                 </p>
                 
                 <div className="w-full bg-zinc-100 h-3 rounded-full overflow-hidden mb-4">
@@ -573,10 +600,14 @@ export default function BookOrchestrator() {
 
                 <Button 
                   variant="outline" 
-                  onClick={() => setCancelDramatization(true)}
+                  onClick={() => {
+                    cancelRef.current = true;
+                    setCancelDramatization(true);
+                  }}
+                  disabled={cancelDramatization}
                   className="w-full py-6 rounded-2xl border-zinc-200 text-zinc-600 hover:bg-zinc-50"
                 >
-                  Cancel Analysis
+                  {cancelDramatization ? 'Cancelling...' : 'Cancel Analysis'}
                 </Button>
               </div>
             </div>
