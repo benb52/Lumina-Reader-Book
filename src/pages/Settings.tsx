@@ -213,11 +213,12 @@ export default function Settings() {
                 </label>
                 <select
                   value={localSettings.aiLanguage || 'he'}
-                  onChange={(e) => setLocalSettings({ ...localSettings, aiLanguage: e.target.value as 'he' | 'en' })}
+                  onChange={(e) => setLocalSettings({ ...localSettings, aiLanguage: e.target.value as 'he' | 'en' | 'es' })}
                   className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white"
                 >
                   <option value="he">Hebrew</option>
                   <option value="en">English</option>
+                  <option value="es">Spanish</option>
                 </select>
                 <p className="text-xs text-zinc-500 mt-1">
                   Language for AI Summary and X-Ray.

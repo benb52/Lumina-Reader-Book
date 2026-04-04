@@ -238,7 +238,7 @@ export default function BookOrchestrator() {
           await new Promise(resolve => setTimeout(resolve, 5000));
         }
 
-        const result = await analyzeSpeakersBatch(batchPages, apiKey, currentSpeakerVoices);
+        const result = await analyzeSpeakersBatch(batchPages, apiKey, currentSpeakerVoices, bookLanguage);
         
         if (result && result.pages) {
           const newSpeakerVoices = { ...currentSpeakerVoices, ...(result.newSpeakerVoices || {}) };
@@ -411,13 +411,25 @@ export default function BookOrchestrator() {
           </div>
           <div className="flex items-center gap-2 mr-4">
             <label className="text-sm text-zinc-600">Language:</label>
-            <input 
-              type="text" 
-              value={bookLanguage} 
-              onChange={(e) => setBookLanguage(e.target.value)}
-              placeholder="e.g. English, Spanish"
-              className="px-3 py-1.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900"
-            />
+            <select
+              value={bookLanguage}
+              onChange={(e) => {
+                setBookLanguage(e.target.value);
+                if (e.target.value === 'Hebrew') {
+                  setTextDirection('rtl');
+                } else {
+                  setTextDirection('ltr');
+                }
+              }}
+              className="px-3 py-1.5 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white"
+            >
+              <option value="Hebrew">Hebrew</option>
+              <option value="English">English</option>
+              <option value="Spanish">Spanish</option>
+              <option value="French">French</option>
+              <option value="German">German</option>
+              <option value="Other">Other</option>
+            </select>
           </div>
           <Button 
             variant="outline" 

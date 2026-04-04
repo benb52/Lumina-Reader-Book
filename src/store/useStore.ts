@@ -75,7 +75,7 @@ export interface AppSettings {
   statisticsTimeframe: 'day' | 'week' | 'month' | 'year' | 'all';
   highlightSavedQuotes: boolean;
   aiChunkSizeMultiplier: number;
-  aiLanguage: 'he' | 'en';
+  aiLanguage: 'he' | 'en' | 'es';
   isDramatizedReadingEnabled: boolean;
 }
 

@@ -39,10 +39,15 @@ class RateLimiter {
                               errorStr.includes('quota') ||
                               errorStr.includes('limit');
           
-          if (isRateLimit) {
-            // If we hit a rate limit, pause the entire limiter for 30 seconds
+          const isTransientError = errorStr.includes('500') || 
+                                   errorStr.includes('internal error') || 
+                                   errorStr.includes('xhr error') ||
+                                   errorStr.includes('error code: 6');
+          
+          if (isRateLimit || isTransientError) {
+            // If we hit a rate limit or transient error, pause the entire limiter for 30 seconds
             this.pausedUntil = Date.now() + 30000;
-            console.warn(`[RateLimiter] Quota hit. Pausing all requests for 30s.`);
+            console.warn(`[RateLimiter] Quota or Transient error hit. Pausing all requests for 30s.`);
           }
           reject(error);
         }
@@ -83,7 +88,9 @@ export const withRetry = async <T>(fn: () => Promise<T>, maxRetries = 7, initial
       const isTransientError = errorStr.includes('500') || 
                                errorStr.includes('internal error') || 
                                errorStr.includes('service_unavailable') ||
-                               errorStr.includes('503');
+                               errorStr.includes('503') ||
+                               errorStr.includes('xhr error') ||
+                               errorStr.includes('error code: 6');
 
       // Check for potential daily limit (often mentions "daily" or "day")
       const isDailyLimit = errorStr.includes('daily') || errorStr.includes('day');
@@ -114,7 +121,7 @@ export const withRetry = async <T>(fn: () => Promise<T>, maxRetries = 7, initial
   }
 };
 
-export const analyzeBookWithAI = async (text: string, apiKey: string, aiLanguage: 'he' | 'en' = 'he', aiChunkSizeMultiplier: number = 1) => {
+export const analyzeBookWithAI = async (text: string, apiKey: string, aiLanguage: 'he' | 'en' | 'es' = 'he', aiChunkSizeMultiplier: number = 1) => {
   if (!apiKey) {
     throw new Error('API Key is required for AI analysis');
   }
@@ -123,8 +130,13 @@ export const analyzeBookWithAI = async (text: string, apiKey: string, aiLanguage
   
   appStore.getState().incrementApiCallCount();
   
-  const chunkSize = 50000 * aiChunkSizeMultiplier;
-  const langInstruction = aiLanguage === 'he' ? 'Hebrew (עברית)' : 'English';
+  const chunkSize = 30000 * aiChunkSizeMultiplier;
+  const langMap = {
+    'he': 'Hebrew (עברית)',
+    'en': 'English',
+    'es': 'Spanish'
+  };
+  const langInstruction = langMap[aiLanguage] || 'Hebrew (עברית)';
 
   const response = await withRetry(() => ai.models.generateContent({
     model: 'gemini-3.1-flash-lite-preview',
@@ -247,7 +259,7 @@ export const getDefinition = async (word: string, context: string, apiKey: strin
   return response.text || '';
 };
 
-export const analyzeSpeakersBatch = async (pages: { index: number, text: string }[], apiKey: string, existingSpeakerVoices: { [name: string]: string } = {}) => {
+export const analyzeSpeakersBatch = async (pages: { index: number, text: string }[], apiKey: string, existingSpeakerVoices: { [name: string]: string } = {}, language: string = 'English') => {
   if (!apiKey) throw new Error('API Key required.');
   const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
   appStore.getState().incrementApiCallCount();
@@ -256,7 +268,7 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
 
   const response = await withRetry(() => ai.models.generateContent({
     model: 'gemini-3.1-flash-lite-preview',
-    contents: `Analyze the following book pages professionally. Break them down into segments and identify who is speaking each segment.
+    contents: `Analyze the following book pages professionally. The book is written in ${language}. Break them down into segments and identify who is speaking each segment.
     
     GUIDELINES:
     1. If it's the narrator, the speaker is "Narrator".
@@ -323,14 +335,14 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
   }
 };
 
-export const analyzeSpeakers = async (text: string, apiKey: string, existingSpeakerVoices: { [name: string]: string } = {}) => {
+export const analyzeSpeakers = async (text: string, apiKey: string, existingSpeakerVoices: { [name: string]: string } = {}, language: string = 'English') => {
   if (!apiKey) throw new Error('API Key required.');
   const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
   appStore.getState().incrementApiCallCount();
 
   const response = await withRetry(() => ai.models.generateContent({
     model: 'gemini-3.1-flash-lite-preview',
-    contents: `Analyze the following book text professionally. Break it down into segments and identify who is speaking each segment.
+    contents: `Analyze the following book text professionally. The book is written in ${language}. Break it down into segments and identify who is speaking each segment.
     
     GUIDELINES:
     1. If it's the narrator, the speaker is "Narrator".

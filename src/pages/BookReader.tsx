@@ -6,7 +6,7 @@ import { db } from '../lib/db';
 import { Button } from '../components/ui/Button';
 import QuotesPanel from '../components/QuotesPanel';
 import XRayPanel from '../components/XRayPanel';
-import { getDefinition, translateText, generateSpeech, translateSentencesBatch, analyzeBookWithAI, analyzeSpeakers, generateMultiSpeakerSpeech } from '../services/ai';
+import { getDefinition, translateText, generateSpeech, translateSentencesBatch, analyzeBookWithAI, analyzeSpeakers, analyzeSpeakersBatch, generateMultiSpeakerSpeech } from '../services/ai';
 import { cn } from '../lib/utils';
 
 // Helper to convert raw PCM base64 to WAV base64 so the browser can play it
@@ -104,7 +104,13 @@ export default function BookReader() {
   const [isDramatizing, setIsDramatizing] = useState(false);
   const [isDramatizingFullBook, setIsDramatizingFullBook] = useState(false);
   const [dramatizationProgress, setDramatizationProgress] = useState(0);
+  const [showDramatizeConfirm, setShowDramatizeConfirm] = useState(false);
+  const [cancelDramatization, setCancelDramatization] = useState(false);
+  const cancelRef = useRef(false);
   const [quotes, setQuotes] = useState<any[]>([]);
+  const [highlightRange, setHighlightRange] = useState<{ start: number, end: number } | null>(null);
+  const highlightRangeRef = useRef<{ start: number, end: number } | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
   
   const [selectedText, setSelectedText] = useState('');
   const [aiResult, setAiResult] = useState<{ type: 'def' | 'trans' | null, content: string }>({ type: null, content: '' });
@@ -178,7 +184,7 @@ export default function BookReader() {
 
   // Auto-scroll to highlighted sentence
   useEffect(() => {
-    if (isPlaying && currentSentenceIndex !== null && contentRef.current) {
+    if (currentSentenceIndex !== null && contentRef.current) {
       // Find the highlighted element. We use a more robust selector.
       const highlightedElement = contentRef.current.querySelector('[data-highlighted="true"]');
       if (highlightedElement) {
@@ -219,17 +225,17 @@ export default function BookReader() {
     }
   };
 
-  const saveProgress = async (pageIndex: number, sentenceIndex?: number) => {
+  const saveProgress = async (pageIndex: number, sentenceIndex?: number | null) => {
     if (book) {
       const updatedBook = { 
         ...book, 
         lastReadPage: pageIndex + 1,
-        lastReadSentenceIndex: sentenceIndex !== undefined ? sentenceIndex : currentSentenceIndex || 0
+        lastReadSentenceIndex: sentenceIndex !== undefined ? sentenceIndex : (isPlaying ? currentSentenceIndex : null)
       };
       await db.saveBook(updatedBook);
       updateBook(book.id, { 
         lastReadPage: pageIndex + 1,
-        lastReadSentenceIndex: sentenceIndex !== undefined ? sentenceIndex : currentSentenceIndex || 0
+        lastReadSentenceIndex: sentenceIndex !== undefined ? sentenceIndex : (isPlaying ? currentSentenceIndex : null)
       });
       
       // Record reading session
@@ -300,7 +306,7 @@ export default function BookReader() {
       const cleanText = getCleanText(pages[currentPage]);
 
       const existingVoices = book.dramatization?.speakerVoices || {};
-      const result = await analyzeSpeakers(cleanText, apiKey, existingVoices);
+      const result = await analyzeSpeakers(cleanText, apiKey, existingVoices, book.language || 'English');
       
       if (result && result.segments) {
         const newSpeakerVoices = { ...existingVoices, ...result.newSpeakerVoices };
@@ -332,95 +338,117 @@ export default function BookReader() {
     return null;
   };
 
-  const handleDramatizeFullBook = async () => {
-    if (!book || !apiKey || pages.length === 0) return;
+  const handleDramatizeFullBook = async (startFresh: boolean = false) => {
+    if (!book || !apiKey || pages.length === 0) {
+      if (!apiKey) setErrorMessage('API Key is required for AI analysis.');
+      return;
+    }
     
+    setShowDramatizeConfirm(false);
     setIsDramatizingFullBook(true);
     setDramatizationProgress(0);
+    setCancelDramatization(false);
+    cancelRef.current = false;
     
-    let currentSpeakerVoices = { ...(book.dramatization?.speakerVoices || {}) };
-    let currentPagesDramatization = { ...(book.dramatization?.pages || {}) };
+    let currentSpeakerVoices = startFresh ? { Narrator: 'Zephyr' } : { Narrator: 'Zephyr', ...(book.dramatization?.speakerVoices || {}) };
+    let currentPagesDramatization = startFresh ? {} : { ...(book.dramatization?.pages || {}) };
     
+    const BATCH_SIZE = 5;
+
     try {
-      for (let i = 0; i < pages.length; i++) {
-        // Skip pages that are already dramatized
-        if (currentPagesDramatization[i]) {
-          setDramatizationProgress(Math.round(((i + 1) / pages.length) * 100));
+      for (let i = 0; i < pages.length; i += BATCH_SIZE) {
+        if (cancelRef.current) break;
+
+        const batchPages: { index: number, text: string }[] = [];
+        for (let j = 0; j < BATCH_SIZE && (i + j) < pages.length; j++) {
+          const pageIdx = i + j;
+          // Skip pages that are already dramatized if not starting fresh
+          if (!startFresh && currentPagesDramatization[pageIdx]) {
+            continue;
+          }
+          const cleanText = getCleanText(pages[pageIdx]);
+          if (cleanText.trim()) {
+            batchPages.push({ index: pageIdx, text: cleanText });
+          }
+        }
+
+        if (batchPages.length === 0) {
+          setDramatizationProgress(Math.min(100, Math.round(((i + BATCH_SIZE) / pages.length) * 100)));
           continue;
         }
 
-        const cleanText = getCleanText(pages[i]);
-        if (!cleanText.trim()) {
-           setDramatizationProgress(Math.round(((i + 1) / pages.length) * 100));
-           continue;
-        }
-
-        const result = await analyzeSpeakers(cleanText, apiKey, currentSpeakerVoices);
-        
-        if (result && result.segments) {
-          currentSpeakerVoices = { ...currentSpeakerVoices, ...result.newSpeakerVoices };
-          const segmentsWithVoices = result.segments.map((s: any) => ({
-            ...s,
-            voice: currentSpeakerVoices[s.speaker] || 'Kore'
-          }));
-
-          currentPagesDramatization[i] = { segments: segmentsWithVoices };
-          
-          const updatedDramatization = {
-            pages: { ...currentPagesDramatization },
-            speakerVoices: { ...currentSpeakerVoices }
-          };
-          
-          const updatedBook = { ...book, dramatization: updatedDramatization };
-          setBook(updatedBook);
-          
-          // Save every 5 pages or at the end
-          if (i % 5 === 0 || i === pages.length - 1) {
-            await db.saveBook(updatedBook);
-            updateBook(book.id, { dramatization: updatedDramatization });
-          }
-        }
-        
-        setDramatizationProgress(Math.round(((i + 1) / pages.length) * 100));
-        // Delay to stay within API limits
+        // Add a delay between requests to proactively avoid rate limits
         if (i > 0) {
           await new Promise(resolve => setTimeout(resolve, 5000));
         }
+
+        const result = await analyzeSpeakersBatch(batchPages, apiKey, currentSpeakerVoices, book.language || 'English');
+        
+        if (result && result.pages) {
+          const newSpeakerVoices = { ...currentSpeakerVoices, ...(result.newSpeakerVoices || {}) };
+          currentSpeakerVoices = newSpeakerVoices;
+
+          result.pages.forEach((pageData: any) => {
+            const segmentsWithVoices = pageData.segments.map((s: any) => ({
+              ...s,
+              voice: newSpeakerVoices[s.speaker] || 'Kore'
+            }));
+            currentPagesDramatization[pageData.pageIndex] = { segments: segmentsWithVoices };
+          });
+
+          // Save incrementally after EVERY batch
+          const updatedDramatization = {
+            pages: currentPagesDramatization,
+            speakerVoices: currentSpeakerVoices
+          };
+          const updatedBook = { ...book, dramatization: updatedDramatization };
+          setBook(updatedBook);
+          await db.saveBook(updatedBook);
+          updateBook(book.id, { dramatization: updatedDramatization });
+        }
+        
+        setDramatizationProgress(Math.min(100, Math.round(((i + BATCH_SIZE) / pages.length) * 100)));
       }
     } catch (err: any) {
       console.error("Full book dramatization failed", err);
-      const errorStr = JSON.stringify(err);
-      if (errorStr.includes('429') || errorStr.includes('RESOURCE_EXHAUSTED')) {
-        setErrorMessage("Gemini API rate limit reached. Please wait a moment and try again.");
+      const errorStr = (err?.message || JSON.stringify(err)).toLowerCase();
+      if (errorStr.includes('429') || errorStr.includes('resource_exhausted') || errorStr.includes('quota')) {
+        setErrorMessage("Gemini API quota exceeded. Progress has been saved. You can resume later by clicking 'Dramatize Full Book' again.");
       } else {
-        setErrorMessage("Failed to dramatize the full book.");
+        setErrorMessage("Failed to dramatize full book. Progress has been saved. Please check your connection and try again.");
       }
     } finally {
       setIsDramatizingFullBook(false);
-      setDramatizationProgress(0);
+      setCancelDramatization(false);
     }
   };
 
   const handleNextPage = () => {
     if (currentPage < pages.length - 1) {
-      setCurrentPage(prev => {
-        const next = prev + 1;
+      const next = currentPage + 1;
+      setCurrentPage(next);
+      if (isPlayingRef.current) {
         saveProgress(next, 0);
-        return next;
-      });
-      setCurrentSentenceIndex(0);
+        setCurrentSentenceIndex(0);
+      } else {
+        saveProgress(next, null);
+        setCurrentSentenceIndex(null);
+      }
       if (isPlaying) stopTTS();
     }
   };
 
   const handlePrevPage = () => {
     if (currentPage > 0) {
-      setCurrentPage(prev => {
-        const next = prev - 1;
+      const next = currentPage - 1;
+      setCurrentPage(next);
+      if (isPlayingRef.current) {
         saveProgress(next, 0);
-        return next;
-      });
-      setCurrentSentenceIndex(0);
+        setCurrentSentenceIndex(0);
+      } else {
+        saveProgress(next, null);
+        setCurrentSentenceIndex(null);
+      }
       if (isPlaying) stopTTS();
     }
   };
@@ -565,12 +593,12 @@ export default function BookReader() {
 
       if (settingsRef.current.isDramatizedReadingEnabled) {
         if (book?.dramatization?.pages[currentPage]) {
-          playWithDramatizedTTS(currentPage);
+          playWithDramatizedTTS(currentPage, startIndex);
         } else {
           // Automatic dramatization
           handleDramatizePage().then((updatedBook) => {
             if (updatedBook && isPlayingRef.current) {
-              playWithDramatizedTTS(currentPage, updatedBook);
+              playWithDramatizedTTS(currentPage, startIndex, updatedBook);
             }
           });
         }
@@ -583,7 +611,7 @@ export default function BookReader() {
     }
   };
 
-  const playWithDramatizedTTS = async (pageIndex: number, currentBook?: Book) => {
+  const playWithDramatizedTTS = async (pageIndex: number, startIndex: number = 0, currentBook?: Book) => {
     const targetBook = currentBook || book;
     const dramatization = targetBook?.dramatization;
     if (!dramatization || !dramatization.pages[pageIndex]) return;
@@ -625,10 +653,14 @@ export default function BookReader() {
           return { start: -1, end: -1 };
         });
 
-        audioRef.current.ontimeupdate = () => {
-          if (!isPlayingRef.current || !audioRef.current) return;
-          const currentTime = audioRef.current.currentTime;
-          
+    audioRef.current.onplay = () => {
+      const updateHighlight = () => {
+        if (!isPlayingRef.current || !audioRef.current) return;
+        
+        const currentTime = audioRef.current.currentTime;
+        const duration = audioRef.current.duration;
+        
+        if (duration && !isNaN(duration) && duration !== Infinity) {
           // Find active segment based on precise timings
           const activeTiming = segmentTimings.find(t => currentTime >= t.start && currentTime < t.end);
           
@@ -637,41 +669,82 @@ export default function BookReader() {
             const segRange = segmentTextRanges[activeSegmentIdx];
             
             if (segRange && segRange.start !== -1) {
-              // Find which sentence this segment belongs to
-              const sentenceIdx = sentenceRanges.findIndex(r => 
-                (segRange.start >= r.start && segRange.start < r.end) ||
-                (r.start >= segRange.start && r.start < segRange.end)
-              );
-              
-              if (sentenceIdx !== -1 && currentSentenceIndexRef.current !== sentenceIdx) {
-                setCurrentSentenceIndex(sentenceIdx);
-                currentSentenceIndexRef.current = sentenceIdx;
-                // Save progress periodically
-                if (sentenceIdx % 5 === 0) {
-                  saveProgress(currentPageRef.current, sentenceIdx);
+              if (!highlightRangeRef.current || highlightRangeRef.current.start !== segRange.start || highlightRangeRef.current.end !== segRange.end) {
+                const newRange = { start: segRange.start, end: segRange.end };
+                setHighlightRange(newRange);
+                highlightRangeRef.current = newRange;
+                
+                // Also update sentence index for backward compatibility and progress tracking
+                const sentenceIdx = sentenceRanges.findIndex(r => 
+                  (segRange.start >= r.start && segRange.start < r.end) ||
+                  (r.start >= segRange.start && r.start < segRange.end)
+                );
+                if (sentenceIdx !== -1 && currentSentenceIndexRef.current !== sentenceIdx) {
+                  setCurrentSentenceIndex(sentenceIdx);
+                  currentSentenceIndexRef.current = sentenceIdx;
+                  if (sentenceIdx % 5 === 0) {
+                    saveProgress(currentPageRef.current, sentenceIdx);
+                  }
                 }
               }
             }
           }
-        };
+        }
+        
+        animationFrameRef.current = requestAnimationFrame(updateHighlight);
+      };
+      animationFrameRef.current = requestAnimationFrame(updateHighlight);
+    };
 
-        audioRef.current.onended = () => {
-           if (!isPlayingRef.current) return;
-           setCurrentSentenceIndex(null);
-           if (settingsRef.current.autoTurnPage && currentPageRef.current < pagesRef.current.length - 1) {
-             setIsTurningPage(true);
-             setTimeout(() => {
-               handleNextPage();
-               setTimeout(() => {
-                 setIsTurningPage(false);
-                 startTTS(0);
-               }, 600);
-             }, 400);
-           } else {
-             setIsPlaying(false);
-           }
-        };
-        audioRef.current.play().catch(e => console.error(e));
+    audioRef.current.onpause = () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+
+    audioRef.current.onended = () => {
+       if (animationFrameRef.current) {
+         cancelAnimationFrame(animationFrameRef.current);
+       }
+       if (!isPlayingRef.current) return;
+       
+       if (settingsRef.current.autoTurnPage && currentPageRef.current < pagesRef.current.length - 1) {
+         setIsTurningPage(true);
+         setTimeout(() => {
+           handleNextPage();
+           setTimeout(() => {
+             setIsTurningPage(false);
+             startTTS(0);
+           }, 600);
+         }, 400);
+       } else {
+         setIsPlaying(false);
+         setCurrentSentenceIndex(null);
+         setHighlightRange(null);
+         highlightRangeRef.current = null;
+       }
+    };
+
+    if (startIndex > 0 && startIndex < sentenceRanges.length) {
+      const targetSentenceRange = sentenceRanges[startIndex];
+      const targetSegmentIdx = segmentTextRanges.findIndex(r => 
+        (targetSentenceRange.start >= r.start && targetSentenceRange.start < r.end)
+      );
+      
+      if (targetSegmentIdx !== -1) {
+        const targetTiming = segmentTimings.find(t => t.segmentIdx === targetSegmentIdx);
+        if (targetTiming) {
+          audioRef.current.onloadedmetadata = () => {
+            if (audioRef.current) {
+              audioRef.current.currentTime = targetTiming.start;
+              audioRef.current.play().catch(e => console.error(e));
+            }
+          };
+          return;
+        }
+      }
+    }
+    audioRef.current.play().catch(e => console.error(e));
       }
     } catch (e) {
       console.error("Dramatized TTS failed", e);
@@ -772,35 +845,58 @@ export default function BookReader() {
           return { start, end };
         });
 
-        audioRef.current.ontimeupdate = () => {
-          if (!isPlayingRef.current || !audioRef.current) return;
-          const duration = audioRef.current.duration;
-          if (!duration || isNaN(duration) || duration === Infinity) return;
-          
-          const progress = audioRef.current.currentTime / duration;
-          const targetChar = progress * chunk.text.length;
-          
-          let activeLocalIdx = sentenceRanges.findIndex(r => targetChar >= r.start && targetChar <= r.end);
-          if (activeLocalIdx === -1) {
-             const closest = sentenceRanges.findIndex(r => targetChar < r.start);
-             activeLocalIdx = closest > 0 ? closest - 1 : (closest === 0 ? 0 : chunk.sentences.length - 1);
-          }
-          
-          const activeGlobalIdx = chunk.startIndex + activeLocalIdx;
-          if (currentSentenceIndexRef.current !== activeGlobalIdx) {
-            setCurrentSentenceIndex(activeGlobalIdx);
-            currentSentenceIndexRef.current = activeGlobalIdx;
-            // Save progress periodically
-            if (activeGlobalIdx % 5 === 0) {
-              saveProgress(currentPageRef.current, activeGlobalIdx);
+        audioRef.current.onplay = () => {
+          const updateHighlight = () => {
+            if (!isPlayingRef.current || !audioRef.current) return;
+            const duration = audioRef.current.duration;
+            if (duration && !isNaN(duration) && duration !== Infinity) {
+              const progress = audioRef.current.currentTime / duration;
+              const targetChar = progress * chunk.text.length;
+              
+              let activeLocalIdx = sentenceRanges.findIndex(r => targetChar >= r.start && targetChar <= r.end);
+              if (activeLocalIdx === -1) {
+                 const closest = sentenceRanges.findIndex(r => targetChar < r.start);
+                 activeLocalIdx = closest > 0 ? closest - 1 : (closest === 0 ? 0 : chunk.sentences.length - 1);
+              }
+              
+              const activeGlobalIdx = chunk.startIndex + activeLocalIdx;
+              if (currentSentenceIndexRef.current !== activeGlobalIdx) {
+                setCurrentSentenceIndex(activeGlobalIdx);
+                currentSentenceIndexRef.current = activeGlobalIdx;
+                
+                // Update highlight range for precise visual feedback
+                const r = sentenceRanges[activeLocalIdx];
+                setHighlightRange({ start: r.start, end: r.end });
+                
+                if (activeGlobalIdx % 5 === 0) {
+                  saveProgress(currentPageRef.current, activeGlobalIdx);
+                }
+              }
             }
+            animationFrameRef.current = requestAnimationFrame(updateHighlight);
+          };
+          animationFrameRef.current = requestAnimationFrame(updateHighlight);
+        };
+
+        audioRef.current.onpause = () => {
+          if (animationFrameRef.current) {
+            cancelAnimationFrame(animationFrameRef.current);
           }
         };
 
         audioRef.current.onended = () => {
+          if (animationFrameRef.current) {
+            cancelAnimationFrame(animationFrameRef.current);
+          }
           if (!isPlayingRef.current) return;
           currentChunkIdx++;
-          localStartIdx = 0; // Reset for subsequent chunks
+          localStartIdx = 0; 
+          setHighlightRange(null);
+          
+          if (currentChunkIdx >= chunks.length) {
+             setCurrentSentenceIndex(null);
+          }
+          
           playNextChunk();
         };
 
@@ -857,6 +953,7 @@ export default function BookReader() {
       }
 
       setCurrentSentenceIndex(currentIdx);
+      saveProgress(currentPageRef.current, currentIdx);
 
       if (!isPlayingRef.current) return;
 
@@ -907,6 +1004,9 @@ export default function BookReader() {
   };
 
   const stopTTS = () => {
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+    }
     if (synthRef.current) {
       synthRef.current.cancel();
     }
@@ -918,7 +1018,9 @@ export default function BookReader() {
     setIsTtsLoading(false);
     isPlayingRef.current = false;
     setCurrentSubtitle('');
-    setCurrentSentenceIndex(null);
+    
+    // Save current progress before stopping
+    saveProgress(currentPageRef.current, currentSentenceIndex);
   };
 
   const handleTextSelection = async (type: 'def' | 'trans' | 'quote') => {
@@ -1030,7 +1132,7 @@ export default function BookReader() {
       return { nodes, finalBold: isBold, finalUnderline: isUnderline, finalQuote: isQuote };
     };
 
-    if (!isPlaying || currentSentenceIndex === null) {
+    if (currentSentenceIndex === null && highlightRange === null) {
       return renderRawText(processedText, false, false, false).nodes;
     }
 
@@ -1056,26 +1158,36 @@ export default function BookReader() {
       cleanToRaw.push(rawIdx + i);
     }
     
-    // 2. Find sentence boundaries in clean text
-    const sentences = getSentences(cleanText);
-    const currentSentence = sentences[currentSentenceIndex];
-    
-    if (!currentSentence) return renderRawText(processedText, false, false, false).nodes;
+    let startCleanIdx = -1;
+    let endCleanIdx = -1;
 
-    let searchIdx = 0;
-    for (let i = 0; i < currentSentenceIndex; i++) {
-      const prevSentence = sentences[i];
-      const idx = cleanText.indexOf(prevSentence, searchIdx);
-      if (idx !== -1) {
-        searchIdx = idx + prevSentence.length;
+    if (highlightRange) {
+      startCleanIdx = highlightRange.start;
+      endCleanIdx = highlightRange.end;
+    } else if (currentSentenceIndex !== null) {
+      // 2. Find sentence boundaries in clean text
+      const sentences = getSentences(cleanText);
+      const currentSentence = sentences[currentSentenceIndex];
+      
+      if (!currentSentence) return renderRawText(processedText, false, false, false).nodes;
+
+      let searchIdx = 0;
+      for (let i = 0; i < currentSentenceIndex; i++) {
+        const prevSentence = sentences[i];
+        const idx = cleanText.indexOf(prevSentence, searchIdx);
+        if (idx !== -1) {
+          searchIdx = idx + prevSentence.length;
+        }
+      }
+
+      startCleanIdx = cleanText.indexOf(currentSentence, searchIdx);
+      if (startCleanIdx !== -1) {
+        endCleanIdx = startCleanIdx + currentSentence.length;
       }
     }
 
-    let startCleanIdx = cleanText.indexOf(currentSentence, searchIdx);
     if (startCleanIdx === -1) return renderRawText(processedText, false, false, false).nodes;
     
-    let endCleanIdx = startCleanIdx + currentSentence.length;
-
     // 3. Map clean indices back to raw indices
     const startRawIdx = cleanToRaw[startCleanIdx];
     const endRawIdx = endCleanIdx < cleanToRaw.length ? cleanToRaw[endCleanIdx] : processedText.length;
@@ -1152,7 +1264,7 @@ export default function BookReader() {
             <Button 
               variant="ghost" 
               size="icon" 
-              onClick={handleDramatizeFullBook} 
+              onClick={() => setShowDramatizeConfirm(true)} 
               disabled={isDramatizing || isDramatizingFullBook}
               title="Dramatize Full Book (AI Analysis)"
             >
@@ -1286,6 +1398,59 @@ export default function BookReader() {
           />
         )}
 
+        {showDramatizeConfirm && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6">
+            <div className="bg-white dark:bg-zinc-900 rounded-2xl p-8 max-w-md w-full shadow-2xl border border-zinc-200 dark:border-zinc-800">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 bg-emerald-100 dark:bg-emerald-900/30 rounded-lg">
+                  <Sparkles className="w-6 h-6 text-emerald-600 dark:text-emerald-400" />
+                </div>
+                <h3 className="text-xl font-bold dark:text-white">Dramatize Full Book</h3>
+              </div>
+              
+              <p className="text-zinc-600 dark:text-zinc-400 mb-6">
+                AI will analyze all pages to identify characters and assign unique voices. This provides a much more immersive reading experience.
+              </p>
+              
+              {book.dramatization?.pages && Object.keys(book.dramatization.pages).length > 0 && (
+                <div className="mb-6 p-4 bg-zinc-50 dark:bg-zinc-800/50 rounded-xl border border-zinc-100 dark:border-zinc-800">
+                  <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100 mb-1">Current Progress</p>
+                  <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                    {Object.keys(book.dramatization.pages).length} of {pages.length} pages already dramatized.
+                  </p>
+                </div>
+              )}
+              
+              <div className="flex flex-col gap-3">
+                <Button 
+                  onClick={() => handleDramatizeFullBook(false)}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white"
+                >
+                  {book.dramatization?.pages && Object.keys(book.dramatization.pages).length > 0 ? "Continue Dramatization" : "Start Dramatization"}
+                </Button>
+                
+                {book.dramatization?.pages && Object.keys(book.dramatization.pages).length > 0 && (
+                  <Button 
+                    variant="outline"
+                    onClick={() => handleDramatizeFullBook(true)}
+                    className="w-full"
+                  >
+                    Start Fresh (Overwrite existing)
+                  </Button>
+                )}
+                
+                <Button 
+                  variant="ghost" 
+                  onClick={() => setShowDramatizeConfirm(false)}
+                  className="w-full"
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {isDramatizingFullBook && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6">
             <div className="bg-white dark:bg-zinc-900 rounded-2xl p-8 max-w-md w-full shadow-2xl border border-zinc-200 dark:border-zinc-800 text-center">
@@ -1309,9 +1474,12 @@ export default function BookReader() {
               <Button 
                 variant="outline" 
                 className="mt-8 w-full"
-                onClick={() => setIsDramatizingFullBook(false)}
+                onClick={() => {
+                  cancelRef.current = true;
+                  setCancelDramatization(true);
+                }}
               >
-                Cancel
+                {cancelDramatization ? "Cancelling..." : "Cancel Analysis"}
               </Button>
             </div>
           </div>
