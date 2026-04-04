@@ -1,0 +1,26 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 1. Admin access - מאפשר למנהל המערכת לראות את כל הנתונים בדף ה-Admin
+    match /{document=**} {
+      allow read: if request.auth != null && request.auth.token.email == 'shakedbenb@gmail.com';
+    }
+
+    // 2. User data - כל משתמש יכול לקרוא ולכתוב רק את הנתונים של עצמו
+    match /users/{userId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // 3. Shared books - מאפשר שיתוף ספרים בין משתמשים
+    match /shared_books/{shareId} {
+      allow create: if request.auth != null;
+      allow read, update, delete: if request.auth != null && (resource.data.targetEmail == request.auth.token.email || resource.data.senderId == request.auth.uid);
+      
+      // מאפשר גישה לחלקים של ספרים גדולים (Chunking)
+      match /chunks/{chunkId} {
+        allow read, write: if request.auth != null;
+      }
+    }
+  }
+}

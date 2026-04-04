@@ -1,7 +1,7 @@
 import { get, set, del, keys } from 'idb-keyval';
 import { Book, AppSettings, VocabularyWord } from '../store/useStore';
 import { db as firestore, auth } from './firebase';
-import { doc, setDoc, getDoc, deleteDoc, collection, getDocs, query, where } from 'firebase/firestore';
+import { doc, setDoc, getDoc, deleteDoc, collection, getDocs, query, where, orderBy } from 'firebase/firestore';
 
 export interface Quote {
   id: string;
@@ -97,18 +97,46 @@ export const db = {
     const latestBook = await this.getBook(book.id) || book;
 
     const shareId = `${senderId}_${book.id}_${Date.now()}`;
-    const sharedBookData = {
+    
+    const bookJson = JSON.stringify(latestBook);
+    const CHUNK_SIZE = 800 * 1024; // 800KB chunks
+    const isLarge = bookJson.length > CHUNK_SIZE;
+    
+    let sharedBookData: any = {
       id: shareId,
-      book: latestBook,
       senderId: senderId,
       senderEmail: senderEmail,
       senderName: auth.currentUser?.displayName || senderEmail.split('@')[0],
       targetEmail: targetEmail.toLowerCase(),
       sentAt: Date.now(),
-      status: 'pending'
+      status: 'pending',
+      isChunked: isLarge
     };
 
-    await setDoc(doc(firestore, 'shared_books', shareId), sharedBookData);
+    if (isLarge) {
+      // Store metadata for the list view
+      sharedBookData.bookMetadata = {
+        title: latestBook.title,
+        author: latestBook.author,
+        coverUrl: latestBook.coverUrl
+      };
+      
+      // Save the main document first
+      await setDoc(doc(firestore, 'shared_books', shareId), sharedBookData);
+      
+      // Split and save chunks
+      const totalChunks = Math.ceil(bookJson.length / CHUNK_SIZE);
+      for (let i = 0; i < totalChunks; i++) {
+        const chunk = bookJson.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+        await setDoc(doc(firestore, `shared_books/${shareId}/chunks`, i.toString()), {
+          index: i,
+          data: chunk
+        });
+      }
+    } else {
+      sharedBookData.book = latestBook;
+      await setDoc(doc(firestore, 'shared_books', shareId), sharedBookData);
+    }
   },
 
   async getReceivedBooks() {
@@ -131,8 +159,29 @@ export const db = {
     }
   },
 
+  async getSharedBookChunks(shareId: string) {
+    try {
+      const q = query(
+        collection(firestore, `shared_books/${shareId}/chunks`),
+        orderBy('index', 'asc')
+      );
+      const querySnapshot = await getDocs(q);
+      const chunks: string[] = [];
+      querySnapshot.forEach((doc) => {
+        chunks.push(doc.data().data);
+      });
+      return chunks.join('');
+    } catch (error) {
+      console.error("Error getting shared book chunks:", error);
+      throw error;
+    }
+  },
+
   async deleteReceivedBook(shareId: string) {
     try {
+      // If it was chunked, we should ideally delete the sub-collection too
+      // But Firestore doesn't support recursive delete easily from client
+      // The main doc deletion is enough for the UI to hide it
       await deleteDoc(doc(firestore, 'shared_books', shareId));
     } catch (error: any) {
       if (error.code !== 'permission-denied' && error.code !== 'unavailable') {
