@@ -45,6 +45,10 @@ export default function BookOrchestrator() {
   const [isPreviewingVoice, setIsPreviewingVoice] = useState<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
 
+  const existingProgress = book?.dramatization?.pages && pages.length > 0
+    ? Math.round((Object.keys(book.dramatization.pages).length / pages.length) * 100)
+    : 0;
+
   useEffect(() => {
     if (id) {
       loadBook(id);
@@ -357,8 +361,21 @@ export default function BookOrchestrator() {
               <Sparkles size={24} />
             </div>
             <h3 className="text-2xl font-bold text-zinc-900 mb-2">AI Dramatization</h3>
-            <p className="text-zinc-600 mb-8 leading-relaxed">
+            <p className="text-zinc-600 mb-4 leading-relaxed">
               AI will analyze the entire book to identify characters and assign professional voices. 
+            </p>
+            {existingProgress > 0 && existingProgress < 100 && (
+              <div className="mb-6 p-4 bg-purple-50 rounded-2xl border border-purple-100">
+                <div className="flex justify-between text-sm font-bold text-purple-700 mb-2">
+                  <span>Current Progress</span>
+                  <span>{existingProgress}%</span>
+                </div>
+                <div className="w-full bg-purple-200 h-2 rounded-full overflow-hidden">
+                  <div className="bg-purple-600 h-full transition-all" style={{ width: `${existingProgress}%` }} />
+                </div>
+              </div>
+            )}
+            <p className="text-zinc-600 mb-8 leading-relaxed">
               How would you like to proceed?
             </p>
             <div className="flex flex-col gap-3">
@@ -366,7 +383,7 @@ export default function BookOrchestrator() {
                 onClick={() => handleDramatizeFullBook(false)}
                 className="bg-purple-600 hover:bg-purple-700 text-white border-transparent py-6 rounded-2xl"
               >
-                Continue with Existing Voices
+                {existingProgress > 0 ? 'Continue Dramatization' : 'Start Dramatization'}
               </Button>
               <Button 
                 variant="outline"
@@ -440,7 +457,14 @@ export default function BookOrchestrator() {
               isDramatizingFullBook && "animate-pulse"
             )}
           >
-            <Sparkles size={16} className="mr-2" /> Dramatize Book (AI)
+            <Sparkles size={16} className="mr-2" /> 
+            {isDramatizingFullBook 
+              ? `Dramatizing (${dramatizationProgress}%)` 
+              : existingProgress > 0 && existingProgress < 100 
+                ? `Continue Dramatization (${existingProgress}%)` 
+                : existingProgress === 100 
+                  ? 'Redo Dramatization' 
+                  : 'Dramatize Book (AI)'}
           </Button>
           <Button variant="outline" onClick={() => navigate(`/book/${book.id}`)} className="flex-1 sm:flex-none justify-center">
             <X size={16} className="mr-2" /> Cancel
