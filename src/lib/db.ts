@@ -93,10 +93,13 @@ export const db = {
       throw new Error("You cannot share a book with yourself.");
     }
 
+    // Ensure we have the latest book data including dramatization
+    const latestBook = await this.getBook(book.id) || book;
+
     const shareId = `${senderId}_${book.id}_${Date.now()}`;
     const sharedBookData = {
       id: shareId,
-      book: book,
+      book: latestBook,
       senderId: senderId,
       senderEmail: senderEmail,
       senderName: auth.currentUser?.displayName || senderEmail.split('@')[0],

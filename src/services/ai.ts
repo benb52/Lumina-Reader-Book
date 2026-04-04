@@ -6,7 +6,7 @@ class RateLimiter {
   private queue: (() => Promise<void>)[] = [];
   private processing = false;
   private lastRequestTime = 0;
-  private minInterval = 15000; // 4 requests per minute (extremely safe for 15 RPM limit)
+  private minInterval = 8000; // 7.5 requests per minute (very safe for 15 RPM limit)
   private pausedUntil = 0;
 
   async schedule<T>(fn: () => Promise<T>): Promise<T> {
@@ -69,7 +69,7 @@ class RateLimiter {
 
 const limiter = new RateLimiter();
 
-export const withRetry = async <T>(fn: () => Promise<T>, maxRetries = 7, initialDelay = 30000): Promise<T> => {
+export const withRetry = async <T>(fn: () => Promise<T>, maxRetries = 12, initialDelay = 30000): Promise<T> => {
   let retries = 0;
   while (true) {
     try {

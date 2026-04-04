@@ -352,6 +352,7 @@ export default function BookReader() {
     
     let currentSpeakerVoices = startFresh ? { Narrator: 'Zephyr' } : { Narrator: 'Zephyr', ...(book.dramatization?.speakerVoices || {}) };
     let currentPagesDramatization = startFresh ? {} : { ...(book.dramatization?.pages || {}) };
+    let latestBook = book;
     
     const BATCH_SIZE = 5;
 
@@ -401,7 +402,8 @@ export default function BookReader() {
             pages: currentPagesDramatization,
             speakerVoices: currentSpeakerVoices
           };
-          const updatedBook = { ...book, dramatization: updatedDramatization };
+          const updatedBook = { ...latestBook, dramatization: updatedDramatization };
+          latestBook = updatedBook;
           setBook(updatedBook);
           await db.saveBook(updatedBook);
           updateBook(book.id, { dramatization: updatedDramatization });
@@ -412,12 +414,18 @@ export default function BookReader() {
     } catch (err: any) {
       console.error("Full book dramatization failed", err);
       const errorStr = (err?.message || JSON.stringify(err)).toLowerCase();
-      if (errorStr.includes('429') || errorStr.includes('resource_exhausted') || errorStr.includes('quota')) {
-        setErrorMessage("Gemini API quota exceeded. Progress has been saved. You can resume later by clicking 'Dramatize Full Book' again.");
+      if (errorStr.includes('429') || errorStr.includes('resource_exhausted') || errorStr.includes('quota') || errorStr.includes('limit')) {
+        setErrorMessage("Gemini API quota exceeded. This usually happens with free API keys. Progress has been saved. You can resume later from the Book Orchestrator.");
       } else {
         setErrorMessage("Failed to dramatize full book. Progress has been saved. Please check your connection and try again.");
       }
     } finally {
+      // Final save to ensure everything is in the store and DB
+      if (latestBook) {
+        setBook(latestBook);
+        await db.saveBook(latestBook);
+        updateBook(book.id, { dramatization: latestBook.dramatization });
+      }
       setIsDramatizingFullBook(false);
       setCancelDramatization(false);
     }
