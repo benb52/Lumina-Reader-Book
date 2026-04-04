@@ -318,7 +318,10 @@ export default function Library() {
           <div>
             <p className="font-medium">You have {receivedBooks.length} pending shared {receivedBooks.length === 1 ? 'book' : 'books'}!</p>
             <p className="text-sm text-blue-600 mt-1">
-              {receivedBooks.map(rb => `${rb.senderName} (${rb.senderEmail}) sent you "${rb.book.title}"`).join(', ')}
+            {receivedBooks.map(rb => {
+              const title = rb.book?.title || rb.bookMetadata?.title || 'Unknown Book';
+              return `${rb.senderName} (${rb.senderEmail}) sent you "${title}"`;
+            }).join(', ')}
             </p>
           </div>
         </div>
