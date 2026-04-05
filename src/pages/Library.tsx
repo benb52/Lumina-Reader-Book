@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { Plus, FileText, Upload, Trash2, Edit3, BookOpen, Archive, ArchiveRestore, Share2, Check, X, Captions } from 'lucide-react';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { Plus, FileText, Upload, Trash2, Edit3, BookOpen, Archive, ArchiveRestore, Share2, Check, X, Captions, AlertCircle } from 'lucide-react';
 import { useStore, Book } from '../store/useStore';
 import { db } from '../lib/db';
 import { Button } from '../components/ui/Button';
@@ -10,6 +10,7 @@ import { cn } from '../lib/utils';
 
 export default function Library() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [books, setBooks] = useState<Book[]>([]);
   const [isImporting, setIsImporting] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
@@ -21,6 +22,16 @@ export default function Library() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const apiKey = useStore((state) => state.settings.apiKey);
+
+  useEffect(() => {
+    if (location.state?.message) {
+      setSuccessMessage(location.state.message);
+      // Clear state to avoid showing again on refresh
+      window.history.replaceState({}, document.title);
+      const timer = setTimeout(() => setSuccessMessage(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [location]);
 
   // Paste Text state
   const [isPasteModalOpen, setIsPasteModalOpen] = useState(false);
@@ -472,7 +483,11 @@ export default function Library() {
               {book.dramatization && (
                 <div className="absolute top-2 right-2 bg-emerald-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded shadow-sm z-20 flex items-center gap-1">
                   <Captions size={10} />
-                  AI
+                  {book.dramatization.pages && book.totalPages > 0 ? (
+                    <span>{Math.round((Object.keys(book.dramatization.pages).length / book.totalPages) * 100)}%</span>
+                  ) : (
+                    <span>AI</span>
+                  )}
                 </div>
               )}
 
@@ -509,46 +524,46 @@ export default function Library() {
               </Link>
               
               {/* Actions Hover Menu */}
-              <div className="absolute -bottom-16 right-0 flex gap-1 opacity-100 md:opacity-0 group-hover:opacity-100 transition-all z-30">
+              <div className="absolute -bottom-12 left-1/2 -translate-x-1/2 flex gap-1.5 opacity-100 md:opacity-0 group-hover:opacity-100 transition-all z-30 bg-white/80 backdrop-blur-md p-1.5 rounded-2xl shadow-xl border border-white/50">
                 <button
                   onClick={(e) => {
                     e.preventDefault();
                     toggleArchive(book);
                   }}
-                  className="p-2 text-zinc-500 hover:text-amber-600 hover:bg-amber-50 rounded-full bg-white shadow-sm border border-zinc-200 transition-colors"
+                  className="p-2 text-zinc-600 hover:text-amber-600 hover:bg-amber-50 rounded-xl transition-colors"
                   title={book.isArchived ? "Unarchive" : "Archive"}
                 >
-                  {book.isArchived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
+                  {book.isArchived ? <ArchiveRestore size={16} /> : <Archive size={16} />}
                 </button>
                 <button
                   onClick={(e) => {
                     e.preventDefault();
                     navigate(`/edit/${book.id}`);
                   }}
-                  className="p-2 text-zinc-500 hover:text-blue-600 hover:bg-blue-50 rounded-full bg-white shadow-sm border border-zinc-200 transition-colors"
+                  className="p-2 text-zinc-600 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-colors"
                   title="Edit book"
                 >
-                  <Edit3 size={14} />
+                  <Edit3 size={16} />
                 </button>
                 <button
                   onClick={(e) => {
                     e.preventDefault();
                     setBookToShare(book);
                   }}
-                  className="p-2 text-zinc-500 hover:text-blue-600 hover:bg-blue-50 rounded-full bg-white shadow-sm border border-zinc-200 transition-colors"
+                  className="p-2 text-zinc-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-colors"
                   title="Share Book"
                 >
-                  <Share2 size={14} />
+                  <Share2 size={16} />
                 </button>
                 <button
                   onClick={(e) => {
                     e.preventDefault();
                     handleDelete(book.id);
                   }}
-                  className="p-2 text-zinc-500 hover:text-red-600 hover:bg-red-50 rounded-full bg-white shadow-sm border border-zinc-200 transition-colors"
+                  className="p-2 text-zinc-600 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors"
                   title="Delete book"
                 >
-                  <Trash2 size={14} />
+                  <Trash2 size={16} />
                 </button>
               </div>
             </div>

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Play, Pause, SkipBack, SkipForward, Settings as SettingsIcon, X, BookOpen, Languages, Search, ChevronLeft, ChevronRight, MessageSquare, Zap, Highlighter, Captions, Sparkles, Moon, Sun, Loader2 } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Settings as SettingsIcon, X, BookOpen, Languages, Search, ChevronLeft, ChevronRight, MessageSquare, Zap, Highlighter, Captions, Sparkles, Moon, Sun, Loader2, MoreVertical } from 'lucide-react';
 import { useStore, Book } from '../store/useStore';
 import { db } from '../lib/db';
 import { Button } from '../components/ui/Button';
@@ -106,6 +106,10 @@ export default function BookReader() {
   const [dramatizationProgress, setDramatizationProgress] = useState(0);
   const [showDramatizeConfirm, setShowDramatizeConfirm] = useState(false);
   const [cancelDramatization, setCancelDramatization] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [audioQueue, setAudioQueue] = useState<{ url: string, segmentIndices: number[] }[]>([]);
+  const audioQueueRef = useRef<{ url: string, segmentIndices: number[] }[]>([]);
+  const isPlayingQueueRef = useRef(false);
   const cancelRef = useRef(false);
   const [quotes, setQuotes] = useState<any[]>([]);
   const [highlightRange, setHighlightRange] = useState<{ start: number, end: number } | null>(null);
@@ -168,11 +172,40 @@ export default function BookReader() {
     const audio = new Audio();
     audioRef.current = audio;
     
+    const handleEnded = () => {
+      if (audioQueueRef.current.length > 0) {
+        const next = audioQueueRef.current.shift()!;
+        audio.src = next.url;
+        audio.play().catch(e => console.error("Queue play failed", e));
+      } else {
+        isPlayingQueueRef.current = false;
+        if (!isPlayingRef.current) return;
+        
+        if (settingsRef.current.autoTurnPage && currentPageRef.current < pagesRef.current.length - 1) {
+          setIsTurningPage(true);
+          setTimeout(() => {
+            handleNextPage();
+            setTimeout(() => {
+              setIsTurningPage(false);
+              startTTS(0);
+            }, 600);
+          }, 400);
+        } else {
+          setIsPlaying(false);
+          setCurrentSentenceIndex(null);
+          setHighlightRange(null);
+          highlightRangeRef.current = null;
+        }
+      }
+    };
+    audio.addEventListener('ended', handleEnded);
+    
     return () => {
       if (synthRef.current) synthRef.current.cancel();
       if (audio) {
         audio.pause();
         audio.src = '';
+        audio.removeEventListener('ended', handleEnded);
       }
       setIsPlaying(false);
       setIsTtsLoading(false);
@@ -306,10 +339,12 @@ export default function BookReader() {
       const cleanText = getCleanText(pages[currentPage]);
 
       const existingVoices = book.dramatization?.speakerVoices || {};
+      const existingGenders = book.dramatization?.speakerGenders || {};
       const result = await analyzeSpeakers(cleanText, apiKey, existingVoices, book.language || 'English');
       
       if (result && result.segments) {
         const newSpeakerVoices = { ...existingVoices, ...result.newSpeakerVoices };
+        const newSpeakerGenders = { ...existingGenders, ...(result.speakerGenders || {}) };
         const segmentsWithVoices = result.segments.map((s: any) => ({
           ...s,
           voice: newSpeakerVoices[s.speaker] || 'Kore'
@@ -320,7 +355,8 @@ export default function BookReader() {
             ...(book.dramatization?.pages || {}),
             [currentPage]: { segments: segmentsWithVoices }
           },
-          speakerVoices: newSpeakerVoices
+          speakerVoices: newSpeakerVoices,
+          speakerGenders: newSpeakerGenders
         };
 
         const updatedBook = { ...book, dramatization: updatedDramatization };
@@ -351,6 +387,7 @@ export default function BookReader() {
     cancelRef.current = false;
     
     let currentSpeakerVoices = startFresh ? { Narrator: 'Zephyr' } : { Narrator: 'Zephyr', ...(book.dramatization?.speakerVoices || {}) };
+    let currentSpeakerGenders = startFresh ? { Narrator: 'female' } : { Narrator: 'female', ...(book.dramatization?.speakerGenders || {}) };
     let currentPagesDramatization = startFresh ? {} : { ...(book.dramatization?.pages || {}) };
     let latestBook = book;
     
@@ -387,7 +424,9 @@ export default function BookReader() {
         
         if (result && result.pages) {
           const newSpeakerVoices = { ...currentSpeakerVoices, ...(result.newSpeakerVoices || {}) };
+          const newSpeakerGenders = { ...currentSpeakerGenders, ...(result.speakerGenders || {}) };
           currentSpeakerVoices = newSpeakerVoices;
+          currentSpeakerGenders = newSpeakerGenders;
 
           result.pages.forEach((pageData: any) => {
             const segmentsWithVoices = pageData.segments.map((s: any) => ({
@@ -400,7 +439,8 @@ export default function BookReader() {
           // Save incrementally after EVERY batch
           const updatedDramatization = {
             pages: currentPagesDramatization,
-            speakerVoices: currentSpeakerVoices
+            speakerVoices: currentSpeakerVoices,
+            speakerGenders: currentSpeakerGenders
           };
           const updatedBook = { ...latestBook, dramatization: updatedDramatization };
           latestBook = updatedBook;
@@ -626,147 +666,44 @@ export default function BookReader() {
 
     const segments = dramatization.pages[pageIndex].segments;
     const speakerVoices = dramatization.speakerVoices || {};
+    
+    // Clear existing queue
+    audioQueueRef.current = [];
+    isPlayingQueueRef.current = false;
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = '';
+    }
+
     setIsTtsLoading(true);
     try {
-      const result = await generateMultiSpeakerSpeech(segments, apiKeyRef.current, speakerVoices);
-      const { audio: audioBase64, segmentTimings } = result;
-      
-      setIsTtsLoading(false);
-      if (audioBase64 && audioRef.current) {
-        const wavUrl = pcmBase64ToWavBase64(audioBase64, 24000);
-        audioRef.current.src = wavUrl;
-        audioRef.current.playbackRate = settingsRef.current.ttsSpeed;
-        
-        // Prepare sentence mapping for highlighting
-        const cleanText = getCleanText(pagesRef.current[pageIndex]);
-        const sentences = getSentences(cleanText);
-        
-        // Pre-calculate sentence ranges in cleanText
-        let sSearchIdx = 0;
-        const sentenceRanges = sentences.map(s => {
-          const start = cleanText.indexOf(s, sSearchIdx);
-          const end = start + s.length;
-          sSearchIdx = end;
-          return { start, end };
-        });
+      let firstChunkStarted = false;
 
-        // Calculate character ranges for segments in the clean text
-        let searchIdx = 0;
-        const segmentTextRanges = segments.map(s => {
-          const start = cleanText.indexOf(s.text, searchIdx);
-          if (start !== -1) {
-            searchIdx = start + s.text.length;
-            return { start, end: searchIdx };
-          }
-          return { start: -1, end: -1 };
-        });
-
-    audioRef.current.onplay = () => {
-      const updateHighlight = () => {
-        if (!isPlayingRef.current || !audioRef.current) return;
-        
-        const currentTime = audioRef.current.currentTime;
-        const duration = audioRef.current.duration;
-        
-        if (duration && !isNaN(duration) && duration !== Infinity) {
-          // Find active segment based on precise timings
-          const activeTiming = segmentTimings.find(t => currentTime >= t.start && currentTime < t.end);
-          
-          if (activeTiming) {
-            const activeSegmentIdx = activeTiming.segmentIdx;
-            const segRange = segmentTextRanges[activeSegmentIdx];
-            
-            if (segRange && segRange.start !== -1) {
-              if (!highlightRangeRef.current || highlightRangeRef.current.start !== segRange.start || highlightRangeRef.current.end !== segRange.end) {
-                const newRange = { start: segRange.start, end: segRange.end };
-                setHighlightRange(newRange);
-                highlightRangeRef.current = newRange;
-                
-                // Also update sentence index for backward compatibility and progress tracking
-                const sentenceIdx = sentenceRanges.findIndex(r => 
-                  (segRange.start >= r.start && segRange.start < r.end) ||
-                  (r.start >= segRange.start && r.start < segRange.end)
-                );
-                if (sentenceIdx !== -1 && currentSentenceIndexRef.current !== sentenceIdx) {
-                  setCurrentSentenceIndex(sentenceIdx);
-                  currentSentenceIndexRef.current = sentenceIdx;
-                  if (sentenceIdx % 5 === 0) {
-                    saveProgress(currentPageRef.current, sentenceIdx);
-                  }
-                }
-              }
+      await generateMultiSpeakerSpeech(
+        segments, 
+        apiKeyRef.current, 
+        speakerVoices,
+        (base64, segmentIndices) => {
+          const url = pcmBase64ToWavBase64(base64, 24000);
+          if (!firstChunkStarted && isPlayingRef.current) {
+            firstChunkStarted = true;
+            setIsTtsLoading(false);
+            if (audioRef.current) {
+              audioRef.current.src = url;
+              audioRef.current.playbackRate = settingsRef.current.ttsSpeed;
+              audioRef.current.play().catch(e => console.error("Initial play failed", e));
+              isPlayingQueueRef.current = true;
             }
+          } else {
+            audioQueueRef.current.push({ url, segmentIndices });
           }
         }
-        
-        animationFrameRef.current = requestAnimationFrame(updateHighlight);
-      };
-      animationFrameRef.current = requestAnimationFrame(updateHighlight);
-    };
-
-    audioRef.current.onpause = () => {
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-    };
-
-    audioRef.current.onended = () => {
-       if (animationFrameRef.current) {
-         cancelAnimationFrame(animationFrameRef.current);
-       }
-       if (!isPlayingRef.current) return;
-       
-       if (settingsRef.current.autoTurnPage && currentPageRef.current < pagesRef.current.length - 1) {
-         setIsTurningPage(true);
-         setTimeout(() => {
-           handleNextPage();
-           setTimeout(() => {
-             setIsTurningPage(false);
-             startTTS(0);
-           }, 600);
-         }, 400);
-       } else {
-         setIsPlaying(false);
-         setCurrentSentenceIndex(null);
-         setHighlightRange(null);
-         highlightRangeRef.current = null;
-       }
-    };
-
-    if (startIndex > 0 && startIndex < sentenceRanges.length) {
-      const targetSentenceRange = sentenceRanges[startIndex];
-      const targetSegmentIdx = segmentTextRanges.findIndex(r => 
-        (targetSentenceRange.start >= r.start && targetSentenceRange.start < r.end)
       );
       
-      if (targetSegmentIdx !== -1) {
-        const targetTiming = segmentTimings.find(t => t.segmentIdx === targetSegmentIdx);
-        if (targetTiming) {
-          audioRef.current.onloadedmetadata = () => {
-            if (audioRef.current) {
-              audioRef.current.currentTime = targetTiming.start;
-              audioRef.current.play().catch(e => console.error(e));
-            }
-          };
-          return;
-        }
-      }
-    }
-    audioRef.current.play().catch(e => console.error(e));
-      }
-    } catch (e) {
-      console.error("Dramatized TTS failed", e);
+    } catch (err) {
+      console.error("Dramatized TTS failed", err);
       setIsTtsLoading(false);
-      setErrorMessage("Dramatized TTS failed. Falling back to standard.");
-      
-      const cleanText = pagesRef.current[currentPageRef.current]
-        .replace(/<<PAGE:\d+>>/g, '')
-        .replace(/<<BOLD_START>>/g, '')
-        .replace(/<<BOLD_END>>/g, '')
-        .replace(/<<UNDERLINE_START>>/g, '')
-        .replace(/<<UNDERLINE_END>>/g, '');
-      const sentences = getSentences(cleanText);
-      playWithGeminiTTS(sentences, 0);
+      setErrorMessage("Failed to generate dramatized speech.");
     }
   };
 
@@ -1256,15 +1193,16 @@ export default function BookReader() {
               <p className={cn("text-xs", settings.theme === 'dark' ? "text-zinc-400" : "text-zinc-500")}>{book.author}</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 md:gap-2">
             <Button 
               variant="ghost" 
               size="icon" 
               onClick={handleDramatizePage} 
               disabled={isDramatizing || isDramatizingFullBook}
               title="Dramatize Page (AI Voices)"
+              className="h-9 w-9"
             >
-              <Captions size={20} className={cn(
+              <Captions size={18} className={cn(
                 book.dramatization?.pages[currentPage] ? "text-emerald-500" : "text-zinc-400",
                 isDramatizing && "animate-pulse text-emerald-400"
               )} />
@@ -1275,28 +1213,86 @@ export default function BookReader() {
               onClick={() => setShowDramatizeConfirm(true)} 
               disabled={isDramatizing || isDramatizingFullBook}
               title="Dramatize Full Book (AI Analysis)"
+              className="h-9 w-9"
             >
-              <Sparkles size={20} className={cn(
+              <Sparkles size={18} className={cn(
                 book.dramatization?.pages && Object.keys(book.dramatization.pages).length === pages.length ? "text-emerald-500" : "text-zinc-400",
                 isDramatizingFullBook && "animate-pulse text-emerald-400"
               )} />
             </Button>
-            <Button variant="ghost" size="icon" onClick={handleAnalyzeSummary} title="AI Summary">
-              <BookOpen size={20} className={showSummary ? "text-purple-500" : "text-zinc-400"} />
-            </Button>
-            <Button variant="ghost" size="icon" onClick={() => { setShowXRay(!showXRay); setShowQuotes(false); setShowSummary(false); }} title="X-Ray">
-              <Zap size={20} className={showXRay ? "text-yellow-500" : "text-zinc-400"} />
-            </Button>
-            <Button variant="ghost" size="icon" onClick={() => { setShowQuotes(!showQuotes); setShowXRay(false); setShowSummary(false); }} title="Quotes">
-              <MessageSquare size={20} className={showQuotes ? "text-blue-500" : "text-zinc-400"} />
-            </Button>
-            <div className="w-px h-6 bg-zinc-200 mx-2" />
-            <Button variant="ghost" size="icon" onClick={() => updateSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' })} title="Toggle Dark Mode">
-              {settings.theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
-            </Button>
-            <Button variant="ghost" size="icon" onClick={() => setIsImmersive(true)} title="Immersive Mode">
-              <BookOpen size={20} />
-            </Button>
+
+            <div className="relative">
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                onClick={() => setShowMoreMenu(!showMoreMenu)}
+                className="h-9 w-9"
+              >
+                <MoreVertical size={18} className="text-zinc-400" />
+              </Button>
+
+              {showMoreMenu && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowMoreMenu(false)} />
+                  <div className={cn(
+                    "absolute right-0 mt-2 w-48 rounded-2xl shadow-xl border z-50 py-2 animate-in fade-in zoom-in-95 duration-200",
+                    settings.theme === 'dark' ? "bg-zinc-800 border-zinc-700" : "bg-white border-zinc-100"
+                  )}>
+                    <button 
+                      onClick={() => { setShowSummary(!showSummary); setShowXRay(false); setShowQuotes(false); setShowMoreMenu(false); }}
+                      className={cn(
+                        "w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors",
+                        settings.theme === 'dark' ? "hover:bg-zinc-700 text-zinc-300" : "hover:bg-zinc-50 text-zinc-700"
+                      )}
+                    >
+                      <BookOpen size={16} className={showSummary ? "text-purple-500" : "text-zinc-400"} />
+                      <span>AI Summary</span>
+                    </button>
+                    <button 
+                      onClick={() => { setShowXRay(!showXRay); setShowQuotes(false); setShowSummary(false); setShowMoreMenu(false); }}
+                      className={cn(
+                        "w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors",
+                        settings.theme === 'dark' ? "hover:bg-zinc-700 text-zinc-300" : "hover:bg-zinc-50 text-zinc-700"
+                      )}
+                    >
+                      <Zap size={16} className={showXRay ? "text-yellow-500" : "text-zinc-400"} />
+                      <span>X-Ray</span>
+                    </button>
+                    <button 
+                      onClick={() => { setShowQuotes(!showQuotes); setShowXRay(false); setShowSummary(false); setShowMoreMenu(false); }}
+                      className={cn(
+                        "w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors",
+                        settings.theme === 'dark' ? "hover:bg-zinc-700 text-zinc-300" : "hover:bg-zinc-50 text-zinc-700"
+                      )}
+                    >
+                      <MessageSquare size={16} className={showQuotes ? "text-blue-500" : "text-zinc-400"} />
+                      <span>Quotes</span>
+                    </button>
+                    <div className={cn("h-px my-1", settings.theme === 'dark' ? "bg-zinc-700" : "bg-zinc-100")} />
+                    <button 
+                      onClick={() => { updateSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' }); setShowMoreMenu(false); }}
+                      className={cn(
+                        "w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors",
+                        settings.theme === 'dark' ? "hover:bg-zinc-700 text-zinc-300" : "hover:bg-zinc-50 text-zinc-700"
+                      )}
+                    >
+                      {settings.theme === 'dark' ? <Sun size={16} className="text-amber-500" /> : <Moon size={16} className="text-zinc-400" />}
+                      <span>{settings.theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
+                    </button>
+                    <button 
+                      onClick={() => { setIsImmersive(true); setShowMoreMenu(false); }}
+                      className={cn(
+                        "w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors",
+                        settings.theme === 'dark' ? "hover:bg-zinc-700 text-zinc-300" : "hover:bg-zinc-50 text-zinc-700"
+                      )}
+                    >
+                      <BookOpen size={16} className="text-zinc-400" />
+                      <span>Immersive Mode</span>
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </header>
       )}

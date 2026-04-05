@@ -66,8 +66,10 @@ export default function BookOrchestrator() {
       setTextDirection(b.textDirection || 'ltr');
       
       const voices = b.dramatization?.speakerVoices || {};
+      const genders = b.dramatization?.speakerGenders || {};
       if (b.dramatization && !voices['Narrator']) {
         voices['Narrator'] = 'Zephyr';
+        genders['Narrator'] = 'female';
       }
       setSpeakerVoices(voices);
       
@@ -151,7 +153,8 @@ export default function BookOrchestrator() {
       // Update dramatization with current speaker voices
       const updatedDramatization = {
         ...(book.dramatization || { pages: {} }),
-        speakerVoices: speakerVoices
+        speakerVoices: speakerVoices,
+        speakerGenders: book.dramatization?.speakerGenders || {}
       };
 
       const updatedBook = { 
@@ -176,7 +179,7 @@ export default function BookOrchestrator() {
         textDirection,
         dramatization: updatedDramatization
       });
-      navigate(`/book/${book.id}`);
+      navigate('/', { state: { message: `Book "${bookTitle}" saved successfully!` } });
     } catch (err) {
       console.error('Failed to save book', err);
       setErrorMessage('Failed to save changes.');
@@ -210,6 +213,7 @@ export default function BookOrchestrator() {
     cancelRef.current = false;
     
     let currentSpeakerVoices = startFresh ? { Narrator: 'Zephyr' } : { Narrator: 'Zephyr', ...(book.dramatization?.speakerVoices || {}) };
+    let currentSpeakerGenders = startFresh ? { Narrator: 'female' } : { Narrator: 'female', ...(book.dramatization?.speakerGenders || {}) };
     let currentPagesDramatization = startFresh ? {} : { ...(book.dramatization?.pages || {}) };
     let latestBook = book;
     
@@ -246,7 +250,9 @@ export default function BookOrchestrator() {
         
         if (result && result.pages) {
           const newSpeakerVoices = { ...currentSpeakerVoices, ...(result.newSpeakerVoices || {}) };
+          const newSpeakerGenders = { ...currentSpeakerGenders, ...(result.speakerGenders || {}) };
           currentSpeakerVoices = newSpeakerVoices;
+          currentSpeakerGenders = newSpeakerGenders;
           setSpeakerVoices(newSpeakerVoices);
 
           result.pages.forEach((pageData: any) => {
@@ -260,7 +266,8 @@ export default function BookOrchestrator() {
           // Save incrementally after EVERY batch
           const updatedDramatization = {
             pages: currentPagesDramatization,
-            speakerVoices: currentSpeakerVoices
+            speakerVoices: currentSpeakerVoices,
+            speakerGenders: currentSpeakerGenders
           };
           const updatedBook = { ...latestBook, dramatization: updatedDramatization };
           latestBook = updatedBook;

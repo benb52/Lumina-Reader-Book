@@ -37,6 +37,7 @@ export interface Book {
       };
     };
     speakerVoices: { [speakerName: string]: string };
+    speakerGenders?: { [speakerName: string]: 'male' | 'female' | 'neutral' };
   };
 }
 

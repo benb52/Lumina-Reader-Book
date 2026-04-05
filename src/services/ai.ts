@@ -6,7 +6,7 @@ class RateLimiter {
   private queue: (() => Promise<void>)[] = [];
   private processing = false;
   private lastRequestTime = 0;
-  private minInterval = 8000; // 7.5 requests per minute (very safe for 15 RPM limit)
+  private minInterval = 3000; // 20 requests per minute
   private pausedUntil = 0;
 
   async schedule<T>(fn: () => Promise<T>): Promise<T> {
@@ -285,6 +285,7 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
     7. Ensure the most dominant characters get unique voices if possible.
     8. If multiple characters must share a voice, ensure they are not in the same scene together.
     9. IMPORTANT: Group the segments by the page index provided in the markers.
+    10. Detect the gender of each character (male, female, or neutral).
     
     Existing character voices to maintain consistency: ${JSON.stringify({ Narrator: 'Zephyr', ...existingSpeakerVoices })}
     
@@ -294,6 +295,7 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
     Return a JSON object with:
     1. "pages": array of objects, each with "pageIndex" (number) and "segments" (array of { text: string, speaker: string })
     2. "newSpeakerVoices": object mapping character names to suggested voices.
+    3. "speakerGenders": object mapping character names to gender ('male', 'female', or 'neutral').
     `,
     config: {
       responseMimeType: 'application/json',
@@ -320,6 +322,9 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
             },
           },
           newSpeakerVoices: {
+            type: Type.OBJECT,
+          },
+          speakerGenders: {
             type: Type.OBJECT,
           },
         },
@@ -358,6 +363,7 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
     6. "Narrator" should usually be 'Zephyr' (calm female) or 'Charon' (mature male) unless context suggests otherwise.
     7. Ensure the most dominant characters get unique voices if possible.
     8. If multiple characters must share a voice, ensure they are not in the same scene together.
+    9. Detect the gender of each character (male, female, or neutral).
     
     Existing character voices to maintain consistency: ${JSON.stringify({ Narrator: 'Zephyr', ...existingSpeakerVoices })}
     
@@ -367,6 +373,7 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
     Return a JSON object with:
     1. "segments": array of { text: string, speaker: string }
     2. "newSpeakerVoices": object mapping character names to suggested voices.
+    3. "speakerGenders": object mapping character names to gender ('male', 'female', or 'neutral').
     `,
     config: {
       responseMimeType: 'application/json',
@@ -384,6 +391,9 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
             },
           },
           newSpeakerVoices: {
+            type: Type.OBJECT,
+          },
+          speakerGenders: {
             type: Type.OBJECT,
           },
         },
@@ -468,7 +478,8 @@ const concatenatePCM = (base64Chunks: string[]): string => {
 export const generateMultiSpeakerSpeech = async (
   segments: { text: string; speaker: string; voice: string }[],
   apiKey: string,
-  overriddenVoices: { [name: string]: string } = {}
+  overriddenVoices: { [name: string]: string } = {},
+  onChunkReady?: (audio: string, segmentTimings: { start: number; end: number; segmentIdx: number }[]) => void
 ): Promise<{ audio: string; segmentTimings: { start: number; end: number; segmentIdx: number }[] }> => {
   if (!apiKey) throw new Error('API Key required for Gemini TTS.');
   if (segments.length === 0) return { audio: '', segmentTimings: [] };
@@ -567,7 +578,8 @@ export const generateMultiSpeakerSpeech = async (
   // We need an AudioContext to decode and get durations
   const tempCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
 
-  for (const chunk of chunks) {
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
     const audio = await generateChunkAudio(chunk);
     if (audio) {
       audioChunks.push(audio);
@@ -575,15 +587,14 @@ export const generateMultiSpeakerSpeech = async (
       // Decode to get exact duration
       const binary = atob(audio);
       const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
       
       try {
         // Gemini TTS returns raw 16-bit PCM Mono at 24kHz.
-        // decodeAudioData expects a container (WAV/MP3), so we decode manually.
         const int16 = new Int16Array(bytes.buffer);
         const float32 = new Float32Array(int16.length);
-        for (let i = 0; i < int16.length; i++) {
-          float32[i] = int16[i] / 32768.0;
+        for (let j = 0; j < int16.length; j++) {
+          float32[j] = int16[j] / 32768.0;
         }
         
         const buffer = new AudioBuffer({
@@ -598,25 +609,30 @@ export const generateMultiSpeakerSpeech = async (
         // Distribute chunk duration among segments in the chunk based on character count
         const chunkTotalChars = chunk.reduce((acc, s) => acc + s.text.length, 0);
         let currentChunkTime = 0;
+        const chunkTimings: { start: number; end: number; segmentIdx: number }[] = [];
         
         chunk.forEach(s => {
           const sDuration = (s.text.length / chunkTotalChars) * chunkDuration;
-          segmentTimings.push({
+          const timing = {
             start: totalDuration + currentChunkTime,
             end: totalDuration + currentChunkTime + sDuration,
             segmentIdx: s.originalIdx
-          });
+          };
+          segmentTimings.push(timing);
+          chunkTimings.push(timing);
           currentChunkTime += sDuration;
         });
+        
+        if (onChunkReady) {
+          onChunkReady(audio, chunkTimings);
+        }
         
         totalDuration += chunkDuration;
       } catch (e) {
         console.error("Failed to decode audio chunk for timing", e);
-        // Fallback to character-based estimation if decoding fails
-        // (though this shouldn't happen with valid PCM)
       }
     }
-    if (chunks.length > 1) await new Promise(resolve => setTimeout(resolve, 500));
+    // No delay between chunks if we have more to do, the limiter handles it
   }
 
   tempCtx.close();
