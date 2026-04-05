@@ -2,24 +2,219 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // 1. Admin access - מאפשר למנהל המערכת לראות את כל הנתונים בדף ה-Admin
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: userId
+    // Fields:
+    //   - uid: string (required)
+    //   - email: string (required, email format)
+    //   - name: string (optional)
+    //   - lastLogin: number (optional)
+    //   - isAdmin: boolean (optional)
+    //   - managedApiKey: string (optional)
+    //   - apiKeyLimit: number (optional)
+    //   - apiKeyUsage: number (optional)
+    //   - isApiKeyManaged: boolean (optional)
+    //
+    // Collection: users/{userId}/books
+    // Document ID: bookId
+    // Fields:
+    //   - id: string (required)
+    //   - title: string (required)
+    //   - author: string (required)
+    //   - content: string (required)
+    //   - totalPages: number (optional)
+    //   - lastReadPage: number (optional)
+    //   - addedAt: number (optional)
+    //   - isArchived: boolean (optional)
+    //   - language: string (optional)
+    //   - textDirection: string (optional)
+    //   - coverUrl: string (optional)
+    //
+    // Collection: users/{userId}/quotes
+    // Document ID: bookId
+    // Fields:
+    //   - quotes: list (required)
+    //
+    // Collection: users/{userId}/settings
+    // Document ID: preferences
+    // Fields:
+    //   - theme: string
+    //   - fontSize: number
+    //   - fontFamily: string
+    //   - ttsSpeed: number
+    //   - ttsVoice: string
+    //   - dailyGoalPages: number
+    //   - apiKey: string
+    //   - highlightStyle: string
+    //   - ttsProvider: string
+    //   - geminiVoice: string
+    //   - subtitleLanguage: string
+    //   - autoTurnPage: boolean
+    //   - isSubtitleTranslationEnabled: boolean
+    //   - statisticsTimeframe: string
+    //   - highlightSavedQuotes: boolean
+    //   - aiChunkSizeMultiplier: number
+    //   - aiLanguage: string
+    //   - isDramatizedReadingEnabled: boolean
+    //
+    // Collection: users/{userId}/vocabulary
+    // Document ID: wordId
+    // Fields:
+    //   - id: string (required)
+    //   - word: string (required)
+    //   - definition: string (required)
+    //   - context: string (optional)
+    //   - bookId: string (optional)
+    //   - addedAt: number (optional)
+    //
+    // Collection: shared_books
+    // Document ID: shareId
+    // Fields:
+    //   - id: string (required)
+    //   - senderId: string (required)
+    //   - senderEmail: string (required)
+    //   - senderName: string (required)
+    //   - targetEmail: string (required)
+    //   - sentAt: number (required)
+    //   - status: string (optional)
+    //   - isChunked: boolean (optional)
+    //   - book: map (optional)
+    //   - bookMetadata: map (optional)
+    //
+    // Collection: shared_books/{shareId}/chunks
+    // Document ID: chunkId
+    // Fields:
+    //   - index: number (required)
+    //   - data: string (required)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true ||
+          (request.auth.token.email == "shakedbenb@gmail.com" && request.auth.token.email_verified == true));
+    }
+    
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+    
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+    
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+    
+    function isValidString(field, maxLen) {
+      return request.resource.data[field] is string && request.resource.data[field].size() <= maxLen;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    // Admin access - can manage all users and shared books
     match /{document=**} {
-      allow read: if request.auth != null && request.auth.token.email == 'shakedbenb@gmail.com';
+      allow read, write: if isAdmin();
     }
 
-    // 2. User data - כל משתמש יכול לקרוא ולכתוב רק את הנתונים של עצמו
-    match /users/{userId}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-    }
-
-    // 3. Shared books - מאפשר שיתוף ספרים בין משתמשים
-    match /shared_books/{shareId} {
-      allow create: if request.auth != null;
-      allow read, update, delete: if request.auth != null && (resource.data.targetEmail == request.auth.token.email || resource.data.senderId == request.auth.uid);
+    // User profile and metadata
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
       
-      // מאפשר גישה לחלקים של ספרים גדולים (Chunking)
+      function isValidUser(data) {
+        return data.uid is string && data.uid.size() < 128 &&
+               isValidEmail(data.email) &&
+               (!('name' in data) || (data.name is string && data.name.size() < 100));
+      }
+
+      allow create: if isOwner(userId) && 
+        hasRequiredFields(['uid', 'email']) &&
+        request.resource.data.uid == userId &&
+        isValidUser(request.resource.data) &&
+        (!('isAdmin' in request.resource.data) || request.resource.data.isAdmin == false);
+        
+      allow update: if isOwner(userId) && 
+        isValidUser(request.resource.data) &&
+        request.resource.data.uid == resource.data.uid &&
+        request.resource.data.email == resource.data.email &&
+        (!('isAdmin' in request.resource.data) || request.resource.data.isAdmin == resource.data.isAdmin) &&
+        (!('managedApiKey' in request.resource.data) || request.resource.data.managedApiKey == resource.data.managedApiKey) &&
+        (!('apiKeyLimit' in request.resource.data) || request.resource.data.apiKeyLimit == resource.data.apiKeyLimit) &&
+        (!('isApiKeyManaged' in request.resource.data) || request.resource.data.isApiKeyManaged == resource.data.isApiKeyManaged);
+        
+      allow update: if (isOwner(userId) || isAdmin()) && 
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['apiKeyUsage', 'lastLogin']);
+    }
+
+    // User's personal books
+    match /users/{userId}/books/{bookId} {
+      allow read, write: if isOwner(userId) || isAdmin();
+      
+      allow create, update: if (isOwner(userId) || isAdmin()) &&
+        isValidString('title', 200) &&
+        isValidString('author', 200) &&
+        isValidString('content', 2000000); // 2MB limit for content (Firestore doc limit is 1MB, but we might chunk or use large strings)
+    }
+
+    // User's quotes
+    match /users/{userId}/quotes/{bookId} {
+      allow read, write: if isOwner(userId) || isAdmin();
+    }
+
+    // User's settings
+    match /users/{userId}/settings/preferences {
+      allow read, write: if isOwner(userId) || isAdmin();
+    }
+
+    // User's vocabulary
+    match /users/{userId}/vocabulary/{wordId} {
+      allow read, write: if isOwner(userId) || isAdmin();
+      
+      allow create, update: if (isOwner(userId) || isAdmin()) &&
+        isValidString('word', 100) &&
+        isValidString('definition', 1000);
+    }
+
+    // Shared books
+    match /shared_books/{shareId} {
+      allow create: if isAuthenticated() && 
+        request.resource.data.senderId == request.auth.uid &&
+        request.resource.data.senderEmail == request.auth.token.email &&
+        isValidEmail(request.resource.data.targetEmail) &&
+        isValidString('senderName', 100);
+        
+      allow read, delete: if isAuthenticated() && 
+        (resource.data.targetEmail == request.auth.token.email || resource.data.senderId == request.auth.uid || isAdmin());
+        
+      // Only allow status updates (e.g. 'accepted')
+      allow update: if isAuthenticated() && 
+        (resource.data.targetEmail == request.auth.token.email || resource.data.senderId == request.auth.uid || isAdmin()) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
+        
       match /chunks/{chunkId} {
-        allow read, write: if request.auth != null;
+        allow read, write: if isAuthenticated() && 
+          (get(/databases/$(database)/documents/shared_books/$(shareId)).data.targetEmail == request.auth.token.email || 
+           get(/databases/$(database)/documents/shared_books/$(shareId)).data.senderId == request.auth.uid || 
+           isAdmin());
       }
     }
   }

@@ -1,7 +1,7 @@
 import { get, set, del, keys } from 'idb-keyval';
 import { Book, AppSettings, VocabularyWord } from '../store/useStore';
 import { db as firestore, auth } from './firebase';
-import { doc, setDoc, getDoc, deleteDoc, collection, getDocs, query, where, orderBy } from 'firebase/firestore';
+import { doc, setDoc, getDoc, deleteDoc, collection, getDocs, query, where, orderBy, increment } from 'firebase/firestore';
 
 export interface Quote {
   id: string;
@@ -433,6 +433,25 @@ export const db = {
       } else {
         console.error("Error deleting vocabulary word from Firebase:", error);
       }
+    }
+  },
+
+  async updateUserAdminSettings(userId: string, settings: { managedApiKey?: string, apiKeyLimit?: number, isApiKeyManaged?: boolean }) {
+    try {
+      const userRef = doc(firestore, 'users', userId);
+      await setDoc(userRef, settings, { merge: true });
+    } catch (error) {
+      console.error("Error updating user admin settings:", error);
+      throw error;
+    }
+  },
+
+  async incrementUserApiUsage(userId: string) {
+    try {
+      const userRef = doc(firestore, 'users', userId);
+      await setDoc(userRef, { apiKeyUsage: increment(1) }, { merge: true });
+    } catch (error) {
+      console.error("Error incrementing user API usage:", error);
     }
   }
 };

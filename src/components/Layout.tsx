@@ -28,7 +28,7 @@ export default function Layout() {
     { name: 'Settings', path: '/settings', icon: Settings },
   ];
 
-  if (user?.email === 'shakedbenb@gmail.com') {
+  if (user?.isAdmin) {
     navItems.push({ name: 'Admin', path: '/admin', icon: Shield });
   }
 

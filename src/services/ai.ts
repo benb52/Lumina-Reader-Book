@@ -1,5 +1,25 @@
 import { GoogleGenAI, Type, Modality } from '@google/genai';
 import { appStore } from '../store/useStore';
+import { db } from '../lib/db';
+
+const getEffectiveApiKey = (providedKey: string) => {
+  const user = appStore.getState().user;
+  if (user?.isApiKeyManaged && user.managedApiKey) {
+    if (user.apiKeyLimit && user.apiKeyUsage !== undefined && user.apiKeyUsage >= user.apiKeyLimit) {
+      throw new Error('Managed Gemini API limit reached. Please contact the administrator.');
+    }
+    return user.managedApiKey;
+  }
+  return providedKey;
+};
+
+const handlePostCall = () => {
+  const user = appStore.getState().user;
+  appStore.getState().incrementApiCallCount();
+  if (user?.isApiKeyManaged) {
+    db.incrementUserApiUsage(user.uid);
+  }
+};
 
 // Global Rate Limiter to prevent exceeding Gemini API quotas
 class RateLimiter {
@@ -122,13 +142,14 @@ export const withRetry = async <T>(fn: () => Promise<T>, maxRetries = 12, initia
 };
 
 export const analyzeBookWithAI = async (text: string, apiKey: string, aiLanguage: 'he' | 'en' | 'es' = 'he', aiChunkSizeMultiplier: number = 1) => {
-  if (!apiKey) {
+  const finalApiKey = getEffectiveApiKey(apiKey);
+  if (!finalApiKey) {
     throw new Error('API Key is required for AI analysis');
   }
 
-  const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
+  const ai = new GoogleGenAI({ apiKey: finalApiKey.trim() });
   
-  appStore.getState().incrementApiCallCount();
+  handlePostCall();
   
   const chunkSize = 30000 * aiChunkSizeMultiplier;
   const langMap = {
@@ -191,10 +212,11 @@ export const analyzeBookWithAI = async (text: string, apiKey: string, aiLanguage
 };
 
 export const translateText = async (text: string, targetLang: string, apiKey: string) => {
-  if (!apiKey) return 'API Key required for translation.';
+  const finalApiKey = getEffectiveApiKey(apiKey);
+  if (!finalApiKey) return 'API Key required for translation.';
   
-  const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
-  appStore.getState().incrementApiCallCount();
+  const ai = new GoogleGenAI({ apiKey: finalApiKey.trim() });
+  handlePostCall();
   const response = await withRetry(() => ai.models.generateContent({
     model: 'gemini-3.1-flash-lite-preview',
     contents: `Translate the following text to ${targetLang}. If ${targetLang} is Hebrew, you MUST translate it to Hebrew (עברית). Output ONLY the translated text and nothing else. Do not include any conversational filler like "Here is the translation", no markdown formatting, and no quotes. Just the raw translated text:\n\n${text}`,
@@ -203,10 +225,11 @@ export const translateText = async (text: string, targetLang: string, apiKey: st
 };
 
 export const translateSentencesBatch = async (sentences: string[], targetLang: string, apiKey: string) => {
-  if (!apiKey || sentences.length === 0) return [];
+  const finalApiKey = getEffectiveApiKey(apiKey);
+  if (!finalApiKey || sentences.length === 0) return [];
   
-  const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
-  appStore.getState().incrementApiCallCount();
+  const ai = new GoogleGenAI({ apiKey: finalApiKey.trim() });
+  handlePostCall();
   
   const payload = sentences.map((s, i) => ({ id: i, text: s }));
   
@@ -248,10 +271,11 @@ export const translateSentencesBatch = async (sentences: string[], targetLang: s
 };
 
 export const getDefinition = async (word: string, context: string, apiKey: string) => {
-  if (!apiKey) return 'API Key required.';
+  const finalApiKey = getEffectiveApiKey(apiKey);
+  if (!finalApiKey) return 'API Key required.';
   
-  const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
-  appStore.getState().incrementApiCallCount();
+  const ai = new GoogleGenAI({ apiKey: finalApiKey.trim() });
+  handlePostCall();
   const response = await withRetry(() => ai.models.generateContent({
     model: 'gemini-3.1-flash-lite-preview',
     contents: `Define the word "${word}" in the context of this sentence: "${context}". Keep it brief.`,
@@ -260,9 +284,10 @@ export const getDefinition = async (word: string, context: string, apiKey: strin
 };
 
 export const analyzeSpeakersBatch = async (pages: { index: number, text: string }[], apiKey: string, existingSpeakerVoices: { [name: string]: string } = {}, language: string = 'English') => {
-  if (!apiKey) throw new Error('API Key required.');
-  const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
-  appStore.getState().incrementApiCallCount();
+  const finalApiKey = getEffectiveApiKey(apiKey);
+  if (!finalApiKey) throw new Error('API Key required.');
+  const ai = new GoogleGenAI({ apiKey: finalApiKey.trim() });
+  handlePostCall();
 
   const formattedPages = pages.map(p => `--- PAGE START: ${p.index} ---\n${p.text}\n--- PAGE END: ${p.index} ---`).join('\n\n');
 
@@ -341,9 +366,10 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
 };
 
 export const analyzeSpeakers = async (text: string, apiKey: string, existingSpeakerVoices: { [name: string]: string } = {}, language: string = 'English') => {
-  if (!apiKey) throw new Error('API Key required.');
-  const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
-  appStore.getState().incrementApiCallCount();
+  const finalApiKey = getEffectiveApiKey(apiKey);
+  if (!finalApiKey) throw new Error('API Key required.');
+  const ai = new GoogleGenAI({ apiKey: finalApiKey.trim() });
+  handlePostCall();
 
   const response = await withRetry(() => ai.models.generateContent({
     model: 'gemini-3.1-flash-lite-preview',
@@ -410,11 +436,12 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
 };
 
 export const generateSpeech = async (text: string, voiceName: string, apiKey: string) => {
-  if (!apiKey) throw new Error('API Key required for Gemini TTS.');
+  const finalApiKey = getEffectiveApiKey(apiKey);
+  if (!finalApiKey) throw new Error('API Key required for Gemini TTS.');
   if (!text.trim()) return '';
 
-  const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
-  appStore.getState().incrementApiCallCount();
+  const ai = new GoogleGenAI({ apiKey: finalApiKey.trim() });
+  handlePostCall();
   
   const response = await withRetry(() => ai.models.generateContent({
     model: 'gemini-2.5-flash-preview-tts',
@@ -481,10 +508,11 @@ export const generateMultiSpeakerSpeech = async (
   overriddenVoices: { [name: string]: string } = {},
   onChunkReady?: (audio: string, segmentTimings: { start: number; end: number; segmentIdx: number }[]) => void
 ): Promise<{ audio: string; segmentTimings: { start: number; end: number; segmentIdx: number }[] }> => {
-  if (!apiKey) throw new Error('API Key required for Gemini TTS.');
+  const finalApiKey = getEffectiveApiKey(apiKey);
+  if (!finalApiKey) throw new Error('API Key required for Gemini TTS.');
   if (segments.length === 0) return { audio: '', segmentTimings: [] };
 
-  const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
+  const ai = new GoogleGenAI({ apiKey: finalApiKey.trim() });
   
   // Apply overridden voices
   const finalSegments = segments.map(s => ({
@@ -513,7 +541,7 @@ export const generateMultiSpeakerSpeech = async (
       };
     });
 
-    appStore.getState().incrementApiCallCount();
+    handlePostCall();
     try {
       const response = await withRetry(() => ai.models.generateContent({
         model: 'gemini-2.5-flash-preview-tts',

@@ -1,0 +1,163 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User metadata and administrative settings.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Unique identifier for the user." },
+        "email": { "type": "string", "format": "email", "description": "User's email address." },
+        "name": { "type": "string", "description": "User's display name." },
+        "lastLogin": { "type": "number", "description": "Timestamp of the last login." },
+        "isAdmin": { "type": "boolean", "description": "Whether the user has administrative privileges." },
+        "managedApiKey": { "type": "string", "description": "API key managed by the administrator for this user." },
+        "apiKeyLimit": { "type": "number", "description": "Maximum number of API calls allowed for the managed key." },
+        "apiKeyUsage": { "type": "number", "description": "Current number of API calls made using the managed key." },
+        "isApiKeyManaged": { "type": "boolean", "description": "Whether the user's API key is managed by the admin." }
+      },
+      "required": ["uid", "email"]
+    },
+    "Book": {
+      "title": "Book",
+      "description": "A book in the user's library.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "author": { "type": "string" },
+        "content": { "type": "string" },
+        "totalPages": { "type": "number" },
+        "lastReadPage": { "type": "number" },
+        "addedAt": { "type": "number" },
+        "isArchived": { "type": "boolean" },
+        "language": { "type": "string" },
+        "textDirection": { "type": "string", "enum": ["ltr", "rtl"] },
+        "coverUrl": { "type": "string" }
+      },
+      "required": ["id", "title", "author", "content"]
+    },
+    "Quote": {
+      "title": "Quote",
+      "description": "A collection of quotes for a book.",
+      "type": "object",
+      "properties": {
+        "quotes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "text": { "type": "string" },
+              "color": { "type": "string" },
+              "page": { "type": "number" }
+            }
+          }
+        }
+      }
+    },
+    "AppSettings": {
+      "title": "AppSettings",
+      "description": "User application preferences.",
+      "type": "object",
+      "properties": {
+        "theme": { "type": "string", "enum": ["light", "dark"] },
+        "fontSize": { "type": "number" },
+        "fontFamily": { "type": "string" },
+        "ttsSpeed": { "type": "number" },
+        "ttsVoice": { "type": "string" },
+        "dailyGoalPages": { "type": "number" },
+        "apiKey": { "type": "string" },
+        "highlightStyle": { "type": "string" },
+        "ttsProvider": { "type": "string" },
+        "geminiVoice": { "type": "string" },
+        "subtitleLanguage": { "type": "string" },
+        "autoTurnPage": { "type": "boolean" },
+        "isSubtitleTranslationEnabled": { "type": "boolean" },
+        "statisticsTimeframe": { "type": "string" },
+        "highlightSavedQuotes": { "type": "boolean" },
+        "aiChunkSizeMultiplier": { "type": "number" },
+        "aiLanguage": { "type": "string" },
+        "isDramatizedReadingEnabled": { "type": "boolean" }
+      }
+    },
+    "VocabularyWord": {
+      "title": "VocabularyWord",
+      "description": "A word saved to the user's vocabulary.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "word": { "type": "string" },
+        "definition": { "type": "string" },
+        "context": { "type": "string" },
+        "bookId": { "type": "string" },
+        "addedAt": { "type": "number" }
+      },
+      "required": ["id", "word", "definition"]
+    },
+    "SharedBook": {
+      "title": "SharedBook",
+      "description": "Information about a shared book.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderEmail": { "type": "string" },
+        "senderName": { "type": "string" },
+        "targetEmail": { "type": "string" },
+        "sentAt": { "type": "number" },
+        "status": { "type": "string" },
+        "isChunked": { "type": "boolean" },
+        "book": { "$ref": "Book" },
+        "bookMetadata": {
+          "type": "object",
+          "properties": {
+            "title": { "type": "string" },
+            "author": { "type": "string" },
+            "coverUrl": { "type": "string" }
+          }
+        }
+      },
+      "required": ["id", "senderId", "targetEmail", "sentAt"]
+    },
+    "BookChunk": {
+      "title": "BookChunk",
+      "description": "A chunk of a large shared book.",
+      "type": "object",
+      "properties": {
+        "index": { "type": "number" },
+        "data": { "type": "string" }
+      },
+      "required": ["index", "data"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile and admin settings."
+    },
+    "/users/{userId}/books/{bookId}": {
+      "schema": "Book",
+      "description": "User's personal library."
+    },
+    "/users/{userId}/quotes/{bookId}": {
+      "schema": "Quote",
+      "description": "Saved quotes for a specific book."
+    },
+    "/users/{userId}/settings/preferences": {
+      "schema": "AppSettings",
+      "description": "User application settings."
+    },
+    "/users/{userId}/vocabulary/{wordId}": {
+      "schema": "VocabularyWord",
+      "description": "User's vocabulary list."
+    },
+    "/shared_books/{shareId}": {
+      "schema": "SharedBook",
+      "description": "Books shared between users."
+    },
+    "/shared_books/{shareId}/chunks/{chunkId}": {
+      "schema": "BookChunk",
+      "description": "Chunks for large shared books."
+    }
+  }
+}

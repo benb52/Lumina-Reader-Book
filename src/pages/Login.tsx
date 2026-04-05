@@ -50,6 +50,8 @@ export default function Login() {
          setError('אימייל או סיסמה שגויים.');
       } else if (err.code === 'auth/email-already-in-use') {
          setError('כתובת האימייל הזו כבר בשימוש.');
+      } else if (err.code === 'auth/operation-not-allowed') {
+         setError('שגיאה: התחברות עם אימייל וסיסמה אינה מופעלת בפרויקט ה-Firebase שלך. יש להפעיל אותה ב-Firebase Console תחת Authentication -> Sign-in method.');
       }
     } finally {
       setIsLoading(false);

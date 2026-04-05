@@ -524,7 +524,7 @@ export default function Library() {
               </Link>
               
               {/* Actions Hover Menu */}
-              <div className="absolute -bottom-12 left-1/2 -translate-x-1/2 flex gap-1.5 opacity-100 md:opacity-0 group-hover:opacity-100 transition-all z-30 bg-white/80 backdrop-blur-md p-1.5 rounded-2xl shadow-xl border border-white/50">
+              <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 flex gap-1.5 opacity-100 md:opacity-0 group-hover:opacity-100 transition-all z-30 bg-white/95 backdrop-blur-md p-1.5 rounded-2xl shadow-xl border border-zinc-200">
                 <button
                   onClick={(e) => {
                     e.preventDefault();

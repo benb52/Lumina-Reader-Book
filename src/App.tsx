@@ -32,13 +32,17 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        let name = user.email?.split('@')[0] || 'User';
         const userMeta = await db.getUserMetadata(user.uid);
-        if (userMeta && userMeta.name) {
-          name = userMeta.name;
-        }
-
-        const userData = { uid: user.uid, email: user.email || '', name };
+        const userData = { 
+          uid: user.uid, 
+          email: user.email || '', 
+          name: userMeta?.name || user.email?.split('@')[0] || 'User',
+          isAdmin: userMeta?.isAdmin || user.email === 'shakedbenb@gmail.com',
+          isApiKeyManaged: userMeta?.isApiKeyManaged || false,
+          managedApiKey: userMeta?.managedApiKey || '',
+          apiKeyLimit: userMeta?.apiKeyLimit || 0,
+          apiKeyUsage: userMeta?.apiKeyUsage || 0,
+        };
         login(userData);
         db.updateUserMetadata(userData);
         // Load settings from Firebase

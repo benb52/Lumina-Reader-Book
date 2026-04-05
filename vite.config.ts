@@ -12,16 +12,37 @@ export default defineConfig(({mode}) => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: [],
+        includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
         workbox: {
-          maximumFileSizeToCacheInBytes: 5000000 // 5MB
+          maximumFileSizeToCacheInBytes: 5000000, // 5MB
+          globPatterns: ['**/*.{js,css,html,ico,png,svg}']
         },
         manifest: {
           name: 'Lumina Reader',
           short_name: 'Lumina',
-          description: 'AI-powered reading assistant',
+          description: 'AI-powered reading assistant for PDF and text files.',
           theme_color: '#ffffff',
-          icons: []
+          background_color: '#ffffff',
+          display: 'standalone',
+          orientation: 'portrait',
+          icons: [
+            {
+              src: 'https://cdn-icons-png.flaticon.com/512/3145/3145765.png',
+              sizes: '192x192',
+              type: 'image/png'
+            },
+            {
+              src: 'https://cdn-icons-png.flaticon.com/512/3145/3145765.png',
+              sizes: '512x512',
+              type: 'image/png'
+            },
+            {
+              src: 'https://cdn-icons-png.flaticon.com/512/3145/3145765.png',
+              sizes: '512x512',
+              type: 'image/png',
+              purpose: 'any maskable'
+            }
+          ]
         }
       })
     ],

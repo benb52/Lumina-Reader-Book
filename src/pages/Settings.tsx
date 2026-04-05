@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useStore } from '../store/useStore';
 import { Button } from '../components/ui/Button';
-import { Save, Key, Volume2, Target, User as UserIcon, Eye, EyeOff, Lock } from 'lucide-react';
+import { Save, Key, Volume2, Target, User as UserIcon, Eye, EyeOff, Lock, Shield } from 'lucide-react';
 import { db } from '../lib/db';
 import { auth } from '../lib/firebase';
 import { updatePassword } from 'firebase/auth';
@@ -188,21 +188,52 @@ export default function Settings() {
               <div className="relative">
                 <input
                   type={showApiKey ? "text" : "password"}
-                  value={localSettings.apiKey || ''}
-                  onChange={(e) => setLocalSettings({ ...localSettings, apiKey: e.target.value.trim() })}
-                  className="w-full px-4 py-2.5 pr-12 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900"
-                  placeholder="AIzaSy..."
+                  value={user?.isApiKeyManaged ? "Managed by Administrator" : (localSettings.apiKey || '')}
+                  onChange={(e) => !user?.isApiKeyManaged && setLocalSettings({ ...localSettings, apiKey: e.target.value.trim() })}
+                  disabled={user?.isApiKeyManaged}
+                  className={`w-full px-4 py-2.5 pr-12 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900 ${user?.isApiKeyManaged ? 'bg-zinc-100 text-zinc-500 cursor-not-allowed' : ''}`}
+                  placeholder={user?.isApiKeyManaged ? "Managed by Administrator" : "AIzaSy..."}
                 />
-                <button
-                  type="button"
-                  onClick={() => setShowApiKey(!showApiKey)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600"
-                >
-                  {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
+                {!user?.isApiKeyManaged && (
+                  <button
+                    type="button"
+                    onClick={() => setShowApiKey(!showApiKey)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600"
+                  >
+                    {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                )}
               </div>
+              {user?.isApiKeyManaged && (
+                <div className="mt-3 p-4 bg-blue-50 rounded-2xl border border-blue-100 flex gap-3 items-start">
+                  <Shield size={18} className="text-blue-600 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="text-sm font-bold text-blue-900">Managed API Key</p>
+                    <p className="text-xs text-blue-700 mt-0.5 leading-relaxed">
+                      Your administrator has provided a managed API key for your account. 
+                      You cannot view or change this key.
+                    </p>
+                    {user.apiKeyLimit > 0 && (
+                      <div className="mt-3 flex flex-col gap-1.5">
+                         <div className="flex items-center justify-between text-[10px] font-bold text-blue-800 uppercase tracking-wider">
+                           <span>Usage</span>
+                           <span>{user.apiKeyUsage || 0} / {user.apiKeyLimit} calls</span>
+                         </div>
+                         <div className="h-1.5 bg-blue-200 rounded-full overflow-hidden">
+                           <div 
+                             className="h-full bg-blue-600 transition-all duration-500" 
+                             style={{ width: `${Math.min(100, ((user.apiKeyUsage || 0) / user.apiKeyLimit) * 100)}%` }}
+                           />
+                         </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
               <p className="text-xs text-zinc-500 mt-2">
-                Required for AI analysis, translation, and definitions. Your key is stored securely in your personal account and cannot be accessed by other users.
+                {user?.isApiKeyManaged 
+                  ? "Your API settings are currently managed by the system administrator."
+                  : "Required for AI analysis, translation, and definitions. Your key is stored securely in your personal account and cannot be accessed by other users."}
               </p>
             </div>
 

@@ -5,6 +5,11 @@ export interface User {
   uid: string;
   email: string;
   name: string;
+  managedApiKey?: string;
+  apiKeyLimit?: number;
+  apiKeyUsage?: number;
+  isApiKeyManaged?: boolean;
+  isAdmin?: boolean;
 }
 
 export interface Book {
