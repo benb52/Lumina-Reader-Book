@@ -1,10 +1,10 @@
 {
-  "projectId": "gen-lang-client-0914625449",
-  "appId": "1:239973013482:web:e86616a9c11849b2000493",
-  "apiKey": "AIzaSyADR7pBzDxGzuQMwxlWpHkkX4qe9_GZz14",
-  "authDomain": "gen-lang-client-0914625449.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-db846fec-05dc-4a58-a8c5-9d03f740fc0f",
-  "storageBucket": "gen-lang-client-0914625449.firebasestorage.app",
-  "messagingSenderId": "239973013482",
-  "measurementId": ""
+  "projectId": "luminabook-cf46f",
+  "appId": "1:258841996251:web:d716f9d5c70ae711b395fe",
+  "apiKey": "AIzaSyCah65Y9Oni7Dzsnetdz68m4c1CeRwhOpQ",
+  "authDomain": "luminabook-cf46f.firebaseapp.com",
+  "firestoreDatabaseId": "(default)",
+  "storageBucket": "luminabook-cf46f.firebasestorage.app",
+  "messagingSenderId": "258841996251",
+  "measurementId": "G-0FPS4V080N"
 }

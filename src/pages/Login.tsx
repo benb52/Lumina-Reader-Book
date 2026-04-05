@@ -40,7 +40,12 @@ export default function Login() {
       const user = userCredential.user;
       
       setTimeout(() => {
-        login({ uid: user.uid, email: user.email || '', name: user.email?.split('@')[0] || 'User' });
+        login({ 
+          uid: user.uid, 
+          email: user.email || '', 
+          name: user.email?.split('@')[0] || 'User',
+          isAdmin: user.email === 'shakedbenb@gmail.com'
+        });
         navigate('/');
       }, 1500);
 
@@ -74,7 +79,8 @@ export default function Login() {
         login({ 
           uid: user.uid, 
           email: user.email || '', 
-          name: user.displayName || user.email?.split('@')[0] || 'User' 
+          name: user.displayName || user.email?.split('@')[0] || 'User',
+          isAdmin: user.email === 'shakedbenb@gmail.com'
         });
         navigate('/');
       }, 1500);
@@ -99,7 +105,7 @@ export default function Login() {
           <div className="bg-zinc-900 text-white p-3 rounded-2xl mb-4">
             <BookOpen size={32} />
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight">ברוכים הבאים ל-Lumina</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">ברוכים הבאים ל-LuminaBook</h1>
           <p className="text-zinc-500 text-sm mt-2 text-center">
             {isSignUp ? 'צור חשבון כדי להתחיל לקרוא' : 'התחבר כדי לגשת לספרייה שלך'}
           </p>

@@ -1,7 +1,58 @@
 import { get, set, del, keys } from 'idb-keyval';
 import { Book, AppSettings, VocabularyWord } from '../store/useStore';
 import { db as firestore, auth } from './firebase';
-import { doc, setDoc, getDoc, deleteDoc, collection, getDocs, query, where, orderBy, increment } from 'firebase/firestore';
+import { doc, setDoc, getDoc, deleteDoc, collection, getDocs, query, where, orderBy, increment, onSnapshot } from 'firebase/firestore';
+
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 export interface Quote {
   id: string;
@@ -29,7 +80,7 @@ export const db = {
     }
   },
 
-  async updateUserMetadata(user: { uid: string; email: string; name?: string }) {
+  async updateUserMetadata(user: { uid: string; email: string; name?: string; isAdmin?: boolean }) {
     try {
       const userRef = doc(firestore, 'users', user.uid);
       const userDoc = await getDoc(userRef);
@@ -39,6 +90,10 @@ export const db = {
         email: user.email,
         lastLogin: Date.now()
       };
+
+      if (user.isAdmin) {
+        updateData.isAdmin = true;
+      }
 
       if (!userDoc.exists() || !userDoc.data().name) {
         updateData.name = user.name || user.email.split('@')[0];
@@ -61,13 +116,19 @@ export const db = {
       const querySnapshot = await getDocs(collection(firestore, 'users'));
       const users: any[] = [];
       querySnapshot.forEach((doc) => {
-        users.push(doc.data());
+        const data = doc.data();
+        // Ensure uid is present, fallback to doc ID if missing
+        users.push({
+          uid: doc.id,
+          ...data
+        });
       });
       return users;
     } catch (error: any) {
-      if (error.code !== 'permission-denied' && error.code !== 'unavailable') {
-        console.error("Error getting all users:", error);
+      if (error.code === 'permission-denied') {
+        handleFirestoreError(error, OperationType.LIST, 'users');
       }
+      console.error("Error getting all users:", error);
       throw error;
     }
   },
@@ -266,42 +327,44 @@ export const db = {
   
   async getAllBooks(): Promise<Book[]> {
     const userId = auth.currentUser?.uid;
-    if (!userId) return [];
+    if (!userId) {
+      console.warn("getAllBooks: No userId found");
+      return [];
+    }
 
     // Get local books
     const allKeys = await keys();
     const prefix = `book-${userId}-`;
     const bookKeys = allKeys.filter((k) => typeof k === 'string' && k.startsWith(prefix));
     const localBooks = await Promise.all(bookKeys.map((k) => get(k as string)));
-    let books = localBooks.filter(Boolean) as Book[];
     
-    // If no local books, try fetching from Firebase
-    if (books.length === 0) {
-      try {
-        const q = collection(firestore, `users/${userId}/books`);
-        const querySnapshot = await getDocs(q);
-        const firebaseBooks: Book[] = [];
-        
-        for (const docSnap of querySnapshot.docs) {
-          firebaseBooks.push(docSnap.data() as Book);
-        }
-        
-        books = firebaseBooks;
-        
-        // Cache locally
-        for (const book of books) {
-          await set(`book-${userId}-${book.id}`, book);
-        }
-      } catch (error: any) {
-        if (error.code === 'permission-denied' || error.code === 'unavailable') {
-          console.warn("Firebase permission denied or offline. Using local data only.");
-        } else {
-          console.error("Error getting all books from Firebase:", error);
-        }
+    const booksMap = new Map<string, Book>();
+    localBooks.filter(Boolean).forEach((b: any) => {
+      booksMap.set(b.id, b);
+    });
+    
+    // Try fetching from Firebase to sync
+    try {
+      const q = collection(firestore, `users/${userId}/books`);
+      const querySnapshot = await getDocs(q);
+      
+      for (const docSnap of querySnapshot.docs) {
+        const fbBook = docSnap.data() as Book;
+        booksMap.set(fbBook.id, fbBook);
+        // Update local cache
+        await set(`book-${userId}-${fbBook.id}`, fbBook);
+      }
+    } catch (error: any) {
+      if (error.code === 'permission-denied') {
+        handleFirestoreError(error, OperationType.LIST, `users/${userId}/books`);
+      } else if (error.code === 'unavailable') {
+        console.warn("Firebase offline. Using local data only.");
+      } else {
+        console.error("Error getting all books from Firebase:", error);
       }
     }
     
-    return books;
+    return Array.from(booksMap.values());
   },
 
   async saveQuotes(bookId: string, quotes: Quote[]) {

@@ -1,7 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useStore } from '../store/useStore';
-import { db } from '../lib/db';
-import { Database, Users, BookOpen, Activity, Shield, Key, AlertCircle, Settings as SettingsIcon, X, Save, CheckCircle2 } from 'lucide-react';
+import { db, handleFirestoreError, OperationType } from '../lib/db';
+import { db as firestore } from '../lib/firebase';
+import { collection, onSnapshot } from 'firebase/firestore';
+import { Database, Users, BookOpen, Activity, Shield, Key, AlertCircle, Settings as SettingsIcon, X, Save, CheckCircle2, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Button } from '../components/ui/Button';
 
@@ -15,12 +17,14 @@ interface UserStats {
   managedApiKey?: string;
   apiKeyLimit?: number;
   apiKeyUsage?: number;
+  isAdmin?: boolean;
 }
 
 export default function AdminDashboard() {
   const user = useStore((state) => state.user);
   const [users, setUsers] = useState<UserStats[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
   const [editingUser, setEditingUser] = useState<UserStats | null>(null);
@@ -30,36 +34,61 @@ export default function AdminDashboard() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
-  const fetchAdminData = async () => {
-    if (!user?.isAdmin) return;
-
+  const fetchStatsForUsers = useCallback(async (allUsers: any[]) => {
     try {
-      const allUsers = await db.getAllUsers();
       const usersWithStats = await Promise.all(
         allUsers.map(async (u) => {
-          const bookCount = await db.getUserBooksCount(u.uid);
+          let bookCount = 0;
+          try {
+            bookCount = await db.getUserBooksCount(u.uid);
+          } catch (e) {
+            console.warn(`Could not fetch book count for user ${u.uid}`, e);
+          }
           return {
             ...u,
+            uid: u.uid || u.id, // Ensure uid is present
             bookCount,
           } as UserStats;
         })
       );
-      setUsers(usersWithStats.sort((a, b) => b.lastLogin - a.lastLogin));
-    } catch (err: any) {
-      console.error("Error fetching admin data:", err);
-      if (err.code === 'permission-denied' || err.message?.includes('permission')) {
-        setError("Firebase permissions error: Please update your Firestore Security Rules to allow admin access.");
-      } else {
-        setError("Failed to load admin data.");
-      }
-    } finally {
-      setLoading(false);
+      setUsers(usersWithStats.sort((a, b) => (b.lastLogin || 0) - (a.lastLogin || 0)));
+    } catch (err) {
+      console.error("Error processing user stats:", err);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchAdminData();
-  }, [user]);
+    if (!user?.isAdmin) return;
+
+    setLoading(true);
+    const unsubscribe = onSnapshot(collection(firestore, 'users'), (snapshot) => {
+      const allUsers = snapshot.docs.map(doc => ({
+        uid: doc.id,
+        ...doc.data()
+      }));
+      fetchStatsForUsers(allUsers);
+      setLoading(false);
+    }, (err) => {
+      console.error("Firestore onSnapshot error:", err);
+      setError("Failed to listen for user updates. Check permissions.");
+      setLoading(false);
+      handleFirestoreError(err, OperationType.LIST, 'users');
+    });
+
+    return () => unsubscribe();
+  }, [user, fetchStatsForUsers]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      const allUsers = await db.getAllUsers();
+      await fetchStatsForUsers(allUsers);
+    } catch (err) {
+      console.error("Manual refresh failed:", err);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const handleEditUser = (u: UserStats) => {
     setEditingUser(u);
@@ -81,7 +110,6 @@ export default function AdminDashboard() {
       setSaveSuccess(true);
       setTimeout(() => {
         setEditingUser(null);
-        fetchAdminData();
       }, 1500);
     } catch (err) {
       console.error("Failed to update user settings:", err);
@@ -98,7 +126,7 @@ export default function AdminDashboard() {
     );
   }
 
-  if (loading) {
+  if (loading && users.length === 0) {
     return (
       <div className="flex items-center justify-center h-full">
         <p className="text-zinc-500">Loading admin data...</p>
@@ -106,7 +134,7 @@ export default function AdminDashboard() {
     );
   }
 
-  if (error) {
+  if (error && users.length === 0) {
     return (
       <div className="p-4 md:p-8 max-w-7xl mx-auto">
         <div className="bg-red-50 text-red-700 p-6 rounded-2xl border border-red-200">
@@ -127,9 +155,21 @@ export default function AdminDashboard() {
           <h1 className="text-2xl font-bold text-zinc-900 mb-2">Admin Dashboard</h1>
           <p className="text-zinc-500">System overview and user statistics.</p>
         </div>
-        <div className="flex items-center gap-2 px-4 py-2 bg-zinc-900 text-white rounded-xl text-sm font-medium">
-          <Shield size={16} />
-          Administrator Access
+        <div className="flex items-center gap-3">
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={handleRefresh}
+            disabled={refreshing}
+            className="gap-2"
+          >
+            <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
+            Refresh
+          </Button>
+          <div className="flex items-center gap-2 px-4 py-2 bg-zinc-900 text-white rounded-xl text-sm font-medium">
+            <Shield size={16} />
+            Administrator Access
+          </div>
         </div>
       </div>
 

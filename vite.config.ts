@@ -18,8 +18,8 @@ export default defineConfig(({mode}) => {
           globPatterns: ['**/*.{js,css,html,ico,png,svg}']
         },
         manifest: {
-          name: 'Lumina Reader',
-          short_name: 'Lumina',
+          name: 'LuminaBook',
+          short_name: 'LuminaBook',
           description: 'AI-powered reading assistant for PDF and text files.',
           theme_color: '#ffffff',
           background_color: '#ffffff',

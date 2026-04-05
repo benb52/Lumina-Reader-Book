@@ -40,7 +40,7 @@ export default function Layout() {
           <div className="bg-zinc-900 text-white p-1.5 rounded-lg">
             <BookOpen size={20} />
           </div>
-          <h1 className="text-lg font-semibold tracking-tight hidden sm:block">Lumina</h1>
+          <h1 className="text-lg font-semibold tracking-tight hidden sm:block">LuminaBook</h1>
         </Link>
 
         {/* Desktop Navigation */}

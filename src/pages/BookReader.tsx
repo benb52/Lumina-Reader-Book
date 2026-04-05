@@ -391,7 +391,7 @@ export default function BookReader() {
     let currentPagesDramatization = startFresh ? {} : { ...(book.dramatization?.pages || {}) };
     let latestBook = book;
     
-    const BATCH_SIZE = 5;
+    const BATCH_SIZE = 2;
 
     try {
       for (let i = 0; i < pages.length; i += BATCH_SIZE) {

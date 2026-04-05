@@ -160,7 +160,7 @@ export const analyzeBookWithAI = async (text: string, apiKey: string, aiLanguage
   const langInstruction = langMap[aiLanguage] || 'Hebrew (עברית)';
 
   const response = await withRetry(() => ai.models.generateContent({
-    model: 'gemini-3.1-flash-lite-preview',
+    model: 'gemini-3-flash-preview',
     contents: `Analyze the following book excerpt and provide a summary, main characters, themes, a glossary of unique terms, and detect the language the book is written in.
     IMPORTANT: The summary, characters descriptions, themes, and glossary definitions MUST be written in ${langInstruction}.
     
@@ -218,7 +218,7 @@ export const translateText = async (text: string, targetLang: string, apiKey: st
   const ai = new GoogleGenAI({ apiKey: finalApiKey.trim() });
   handlePostCall();
   const response = await withRetry(() => ai.models.generateContent({
-    model: 'gemini-3.1-flash-lite-preview',
+    model: 'gemini-3-flash-preview',
     contents: `Translate the following text to ${targetLang}. If ${targetLang} is Hebrew, you MUST translate it to Hebrew (עברית). Output ONLY the translated text and nothing else. Do not include any conversational filler like "Here is the translation", no markdown formatting, and no quotes. Just the raw translated text:\n\n${text}`,
   }));
   return response.text?.trim() || '';
@@ -234,7 +234,7 @@ export const translateSentencesBatch = async (sentences: string[], targetLang: s
   const payload = sentences.map((s, i) => ({ id: i, text: s }));
   
   const response = await withRetry(() => ai.models.generateContent({
-    model: 'gemini-3.1-flash-lite-preview',
+    model: 'gemini-3-flash-preview',
     contents: `Translate the following JSON array of objects to ${targetLang}. If ${targetLang} is Hebrew, you MUST translate it to Hebrew (עברית). Return a JSON array of objects with the exact same 'id' and a new 'trans' field containing the translation. Do not miss any IDs.\n\n${JSON.stringify(payload)}`,
     config: {
       responseMimeType: 'application/json',
@@ -277,7 +277,7 @@ export const getDefinition = async (word: string, context: string, apiKey: strin
   const ai = new GoogleGenAI({ apiKey: finalApiKey.trim() });
   handlePostCall();
   const response = await withRetry(() => ai.models.generateContent({
-    model: 'gemini-3.1-flash-lite-preview',
+    model: 'gemini-3-flash-preview',
     contents: `Define the word "${word}" in the context of this sentence: "${context}". Keep it brief.`,
   }));
   return response.text || '';
@@ -292,7 +292,7 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
   const formattedPages = pages.map(p => `--- PAGE START: ${p.index} ---\n${p.text}\n--- PAGE END: ${p.index} ---`).join('\n\n');
 
   const response = await withRetry(() => ai.models.generateContent({
-    model: 'gemini-3.1-flash-lite-preview',
+    model: 'gemini-3-flash-preview',
     contents: `Analyze the following book pages professionally. The book is written in ${language}. Break them down into segments and identify who is speaking each segment.
     
     GUIDELINES:
@@ -311,6 +311,8 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
     8. If multiple characters must share a voice, ensure they are not in the same scene together.
     9. IMPORTANT: Group the segments by the page index provided in the markers.
     10. Detect the gender of each character (male, female, or neutral).
+    11. DO NOT repeat the same text multiple times. Ensure the segments exactly reconstruct the original text.
+    12. Keep the JSON response as compact as possible.
     
     Existing character voices to maintain consistency: ${JSON.stringify({ Narrator: 'Zephyr', ...existingSpeakerVoices })}
     
@@ -372,7 +374,7 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
   handlePostCall();
 
   const response = await withRetry(() => ai.models.generateContent({
-    model: 'gemini-3.1-flash-lite-preview',
+    model: 'gemini-3-flash-preview',
     contents: `Analyze the following book text professionally. The book is written in ${language}. Break it down into segments and identify who is speaking each segment.
     
     GUIDELINES:
@@ -390,6 +392,8 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
     7. Ensure the most dominant characters get unique voices if possible.
     8. If multiple characters must share a voice, ensure they are not in the same scene together.
     9. Detect the gender of each character (male, female, or neutral).
+    10. DO NOT repeat the same text multiple times. Ensure the segments exactly reconstruct the original text.
+    11. Keep the JSON response as compact as possible.
     
     Existing character voices to maintain consistency: ${JSON.stringify({ Narrator: 'Zephyr', ...existingSpeakerVoices })}
     

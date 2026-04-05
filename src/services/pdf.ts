@@ -25,7 +25,7 @@ const PAGE_NUMBER_LINE_RE =
 
 /** רגקס לזיהוי כותרות פרק נפוצות */
 const CHAPTER_HEADING_RE =
-  /^(?:(?:chapter|פרק|פרק\s+\w+|חלק|part)\s+[\divxlcdmIVXLCDM\u05d0-\u05ea]+[\s:.\-–]?)/i;
+  /^(?:(?:chapter|פרק|פרק\s+\w+|חלק|part|preface|prologue|introduction|foreword|הקדמה|מבוא|פתיחה|פרולוג)\s*[\divxlcdmIVXLCDM\u05d0-\u05ea]*[\s:.\-–]?)/i;
 
 // ─── טיפוסים ──────────────────────────────────────────────────────────────────
 
@@ -52,9 +52,7 @@ export async function parsePDF(arrayBuffer: ArrayBuffer): Promise<ParsedBook> {
   // שלב 2: בניית רשימת Artifacts שיש להסיר
   const artifacts = detectArtifacts(rawPages);
 
-  // שלב 3: ניקוי כל עמוד PDF בנפרד (שמירה על חלוקת העמודים המקורית)
-  const pages: string[] = [];
-  const chapters: { title: string; page: number }[] = [];
+  // שלב 3: איסוף כל הפסקאות מכל העמודים
   const allParagraphs: string[] = [];
 
   for (const rawPage of rawPages) {
@@ -62,52 +60,33 @@ export async function parsePDF(arrayBuffer: ArrayBuffer): Promise<ParsedBook> {
 
     for (const line of rawPage.lines) {
       const trimmed = line.trim();
-
-      // דילוג על Artifacts ושורות ריקות
       if (!trimmed || artifacts.has(trimmed)) continue;
 
-      // ניקוי תווים בעייתיים שנוצרים בחילוץ PDF
       const clean = trimmed
-        .replace(/\uFFFD/g, "")       // תו חלופי חסר
-        .replace(/\u00AD/g, "")       // מקף רך
-        .replace(/\s{2,}/g, " ");     // רווחים מרובים
+        .replace(/\uFFFD/g, "")
+        .replace(/\u00AD/g, "")
+        .replace(/\s{2,}/g, " ");
 
       if (clean.length > 0) cleanedLines.push(clean);
     }
 
     if (cleanedLines.length > 0) {
-      // חיבור שורות העמוד
       const joined = cleanedLines.join("\n");
-
-      // תיקון מילים שנשברו עם מקף בסוף שורה
       const hyphenFixed = joined.replace(/-\n([a-zA-Z\u05d0-\u05ea])/g, "$1");
-
-      // שורה שמסתיימת באמצע משפט + שורה הבאה שמתחילה באות קטנה -> חיבור
       const lineJoined = hyphenFixed.replace(
         /([^\.\!\?\:\n])\n([a-z\u05d0-\u05ea\u0590-\u05ff])/g,
         "$1 $2"
       );
 
-      // פיצול לפסקאות בתוך העמוד
       const pageParagraphs = splitIntoParagraphs(lineJoined);
       allParagraphs.push(...pageParagraphs);
-
-      // זיהוי פרקים בעמוד הנוכחי
-      for (const para of pageParagraphs) {
-        if (CHAPTER_HEADING_RE.test(para) || isLikelyHeading(para)) {
-          chapters.push({ title: para, page: pages.length + 1 });
-        }
-      }
-
-      // שמירת העמוד הנקי
-      pages.push(pageParagraphs.join("\n\n"));
-    } else {
-      // עמוד ריק
-      pages.push("");
     }
   }
 
-  // שלב 4: הרכבת מחרוזת ה-content עם סימניות
+  // שלב 4: חלוקה חכמה לעמודי תצוגה (מבטיח סיום בנקודה והתחלת דף חדש בפרקים)
+  const { pages, chapters } = buildDisplayPages(allParagraphs);
+
+  // שלב 5: הרכבת מחרוזת ה-content עם סימניות
   const content = pages
     .map((page, i) => `<<PAGE:${i + 1}>>\n${page}\n<<LUMINA_PAGE_BREAK>>\n`)
     .join("");
@@ -297,10 +276,31 @@ function buildCleanTextStream(
  * פסקה = בלוק טקסט שמופרד מהבא אחריו בשורה ריקה אחת לפחות.
  */
 function splitIntoParagraphs(text: string): string[] {
-  return text
-    .split(/\n{2,}/)
-    .map((p) => p.replace(/\n/g, " ").trim())
-    .filter((p) => p.length >= 20); // הסרת שברים קצרים מדי
+  // Split by double newline first
+  const blocks = text.split(/\n{2,}/);
+  const result: string[] = [];
+
+  for (const block of blocks) {
+    // Check for headings inside a block that might be separated by only one newline
+    const lines = block.split('\n');
+    let current = '';
+    
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      
+      if (CHAPTER_HEADING_RE.test(trimmed) || isLikelyHeading(trimmed)) {
+        if (current) result.push(current.trim());
+        result.push(trimmed);
+        current = '';
+      } else {
+        current += (current ? ' ' : '') + trimmed;
+      }
+    }
+    if (current) result.push(current.trim());
+  }
+
+  return result.filter((p) => p.length >= 20 || CHAPTER_HEADING_RE.test(p) || isLikelyHeading(p));
 }
 
 // ─── שלב 5: בניית עמודי תצוגה חכמים ─────────────────────────────────────────
@@ -334,6 +334,7 @@ function buildDisplayPages(paragraphs: string[]): DisplayPages {
 
   for (const para of paragraphs) {
     const isChapterHeading = CHAPTER_HEADING_RE.test(para) || isLikelyHeading(para);
+    const processedPara = isChapterHeading ? `<<BOLD_START>>${para}<<BOLD_END>>` : para;
 
     // כותרת פרק: תמיד פותחת עמוד חדש
     if (isChapterHeading) {
@@ -397,15 +398,15 @@ function buildDisplayPages(paragraphs: string[]): DisplayPages {
     }
 
     // האם הוספת הפסקה תחרוג מהמקסימום?
-    const wouldExceed = currentChars + para.length > MAX_PAGE_CHARS;
+    const wouldExceed = currentChars + processedPara.length > MAX_PAGE_CHARS;
     const hasEnough   = currentChars >= MIN_PAGE_CHARS;
 
     if (wouldExceed && hasEnough) {
       flushPage();
     }
 
-    currentParagraphs.push(para);
-    currentChars += para.length + 2; // +2 לרווח הפסקה
+    currentParagraphs.push(processedPara);
+    currentChars += processedPara.length + 2; // +2 לרווח הפסקה
   }
 
   flushPage(); // שמירת השאריות

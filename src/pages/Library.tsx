@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { Plus, FileText, Upload, Trash2, Edit3, BookOpen, Archive, ArchiveRestore, Share2, Check, X, Captions, AlertCircle } from 'lucide-react';
+import { Plus, FileText, Upload, Trash2, Edit3, BookOpen, Archive, ArchiveRestore, Share2, Check, X, Captions, AlertCircle, RefreshCw } from 'lucide-react';
 import { useStore, Book } from '../store/useStore';
 import { db } from '../lib/db';
 import { Button } from '../components/ui/Button';
@@ -21,7 +21,13 @@ export default function Library() {
   const [receivedBooks, setReceivedBooks] = useState<any[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const user = useStore((state) => state.user);
   const apiKey = useStore((state) => state.settings.apiKey);
+
+  // Paste Text state
+  const [isPasteModalOpen, setIsPasteModalOpen] = useState(false);
+  const [pastedTitle, setPastedTitle] = useState('');
+  const [pastedText, setPastedText] = useState('');
 
   useEffect(() => {
     if (location.state?.message) {
@@ -33,15 +39,25 @@ export default function Library() {
     }
   }, [location]);
 
-  // Paste Text state
-  const [isPasteModalOpen, setIsPasteModalOpen] = useState(false);
-  const [pastedTitle, setPastedTitle] = useState('');
-  const [pastedText, setPastedText] = useState('');
-
   useEffect(() => {
-    loadBooks();
-    loadReceivedBooks();
-  }, []);
+    if (user) {
+      loadBooks();
+      loadReceivedBooks();
+    }
+  }, [user]);
+
+  const handleManualRefresh = async () => {
+    setIsImporting(true);
+    try {
+      await loadBooks();
+      await loadReceivedBooks();
+      setSuccessMessage("Library synced with cloud.");
+    } catch (err) {
+      setErrorMessage("Failed to sync library.");
+    } finally {
+      setIsImporting(false);
+    }
+  };
 
   const handlePasteSubmit = async () => {
     if (!pastedTitle.trim() || !pastedText.trim()) return;
@@ -396,6 +412,15 @@ export default function Library() {
         </div>
         
         <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+          <Button 
+            variant="outline" 
+            onClick={handleManualRefresh}
+            className="w-full sm:w-auto justify-center"
+            disabled={isImporting}
+          >
+            <RefreshCw size={18} className={cn("mr-2", isImporting && "animate-spin")} />
+            Sync Cloud
+          </Button>
           <Button 
             variant="outline" 
             onClick={() => setShowArchived(!showArchived)}
