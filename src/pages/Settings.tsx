@@ -5,8 +5,10 @@ import { Save, Key, Volume2, Target, User as UserIcon, Eye, EyeOff, Lock, Shield
 import { db } from '../lib/db';
 import { auth } from '../lib/firebase';
 import { updatePassword } from 'firebase/auth';
+import { useNavigate } from 'react-router-dom';
 
 export default function Settings() {
+  const navigate = useNavigate();
   const settings = useStore((state) => state.settings);
   const updateSettings = useStore((state) => state.updateSettings);
   const user = useStore((state) => state.user);
@@ -42,7 +44,10 @@ export default function Settings() {
     }
 
     setIsSaved(true);
-    setTimeout(() => setIsSaved(false), 2000);
+    setTimeout(() => {
+      setIsSaved(false);
+      navigate('/');
+    }, 1000);
   };
 
   const handleChangePassword = async (e: React.FormEvent) => {
