@@ -72,7 +72,7 @@ export interface AppSettings {
   ttsVoice: string;
   dailyGoalPages: number;
   apiKey: string;
-  highlightStyle: 'yellow-bg' | 'underline' | 'bold' | 'text-blue';
+  highlightStyle: 'yellow-bg' | 'underline' | 'bold' | 'text-blue' | 'character-based';
   ttsProvider: 'browser' | 'gemini';
   geminiVoice: 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' | 'Aoede';
   subtitleLanguage: string;

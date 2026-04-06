@@ -334,6 +334,9 @@ export default function Settings() {
                 <option value="underline">Underline</option>
                 <option value="bold">Bold Text</option>
                 <option value="text-blue">Blue Text</option>
+                {localSettings.isDramatizedReadingEnabled && (
+                  <option value="character-based">Character-Based (Gender Colors)</option>
+                )}
               </select>
             </div>
 

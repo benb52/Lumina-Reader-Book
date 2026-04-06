@@ -691,11 +691,15 @@ export const generateMultiSpeakerSpeech = async (
         chunk.forEach(s => {
           const sDuration = (s.text.length / chunkTotalChars) * chunkDuration;
           const timing = {
-            start: totalDuration + currentChunkTime,
-            end: totalDuration + currentChunkTime + sDuration,
+            start: currentChunkTime,
+            end: currentChunkTime + sDuration,
             segmentIdx: s.originalIdx
           };
-          segmentTimings.push(timing);
+          segmentTimings.push({
+            ...timing,
+            start: totalDuration + timing.start,
+            end: totalDuration + timing.end
+          });
           chunkTimings.push(timing);
           currentChunkTime += sDuration;
         });

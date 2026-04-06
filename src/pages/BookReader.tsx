@@ -107,8 +107,8 @@ export default function BookReader() {
   const [showDramatizeConfirm, setShowDramatizeConfirm] = useState(false);
   const [cancelDramatization, setCancelDramatization] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
-  const [audioQueue, setAudioQueue] = useState<{ url: string, segmentIndices: number[] }[]>([]);
-  const audioQueueRef = useRef<{ url: string, segmentIndices: number[] }[]>([]);
+  const [audioQueue, setAudioQueue] = useState<{ url: string, timings: { start: number, end: number, segmentIdx: number }[] }[]>([]);
+  const audioQueueRef = useRef<{ url: string, timings: { start: number, end: number, segmentIdx: number }[] }[]>([]);
   const isPlayingQueueRef = useRef(false);
   const cancelRef = useRef(false);
   const [quotes, setQuotes] = useState<any[]>([]);
@@ -125,6 +125,7 @@ export default function BookReader() {
   const [isTranslatingSubtitle, setIsTranslatingSubtitle] = useState(false);
   const [batchTranslationStatus, setBatchTranslationStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [currentSentenceIndex, setCurrentSentenceIndex] = useState<number | null>(null);
+  const [currentSegmentIndex, setCurrentSegmentIndex] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [geminiAudioData, setGeminiAudioData] = useState<{ url: string, sentences: string[] } | null>(null);
   const [isTurningPage, setIsTurningPage] = useState(false);
@@ -152,6 +153,7 @@ export default function BookReader() {
   const pagesRef = useRef(pages);
   const isTurningPageRef = useRef(isTurningPage);
   const currentSentenceIndexRef = useRef(currentSentenceIndex);
+  const currentSegmentIndexRef = useRef(currentSegmentIndex);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -162,7 +164,8 @@ export default function BookReader() {
     pagesRef.current = pages;
     isTurningPageRef.current = isTurningPage;
     currentSentenceIndexRef.current = currentSentenceIndex;
-  }, [settings, apiKey, isPlaying, currentPage, pages, isTurningPage, currentSentenceIndex]);
+    currentSegmentIndexRef.current = currentSegmentIndex;
+  }, [settings, apiKey, isPlaying, currentPage, pages, isTurningPage, currentSentenceIndex, currentSegmentIndex]);
 
   useEffect(() => {
     if (id) {
@@ -176,6 +179,23 @@ export default function BookReader() {
       if (audioQueueRef.current.length > 0) {
         const next = audioQueueRef.current.shift()!;
         audio.src = next.url;
+        audio.playbackRate = settingsRef.current.ttsSpeed;
+        
+        audio.onplay = () => {
+          const updateDramatizedHighlight = () => {
+            if (!isPlayingRef.current || !audioRef.current) return;
+            const currentTime = audioRef.current.currentTime;
+            
+            const activeTiming = next.timings.find(t => currentTime >= t.start && currentTime <= t.end);
+            if (activeTiming && currentSegmentIndexRef.current !== activeTiming.segmentIdx) {
+              setCurrentSegmentIndex(activeTiming.segmentIdx);
+              currentSegmentIndexRef.current = activeTiming.segmentIdx;
+            }
+            animationFrameRef.current = requestAnimationFrame(updateDramatizedHighlight);
+          };
+          animationFrameRef.current = requestAnimationFrame(updateDramatizedHighlight);
+        };
+
         audio.play().catch(e => console.error("Queue play failed", e));
       } else {
         isPlayingQueueRef.current = false;
@@ -193,6 +213,7 @@ export default function BookReader() {
         } else {
           setIsPlaying(false);
           setCurrentSentenceIndex(null);
+          setCurrentSegmentIndex(null);
           setHighlightRange(null);
           highlightRangeRef.current = null;
         }
@@ -212,12 +233,13 @@ export default function BookReader() {
       isPlayingRef.current = false;
       setCurrentSubtitle('');
       setCurrentSentenceIndex(null);
+      setCurrentSegmentIndex(null);
     };
   }, [id]);
 
-  // Auto-scroll to highlighted sentence
+  // Auto-scroll to highlighted sentence or segment
   useEffect(() => {
-    if (currentSentenceIndex !== null && contentRef.current) {
+    if ((currentSentenceIndex !== null || currentSegmentIndex !== null) && contentRef.current) {
       // Find the highlighted element. We use a more robust selector.
       const highlightedElement = contentRef.current.querySelector('[data-highlighted="true"]');
       if (highlightedElement) {
@@ -236,7 +258,7 @@ export default function BookReader() {
         }
       }
     }
-  }, [currentSentenceIndex, isPlaying]);
+  }, [currentSentenceIndex, currentSegmentIndex, isPlaying]);
 
   const loadBook = async (bookId: string) => {
     const b = await db.getBook(bookId);
@@ -683,7 +705,7 @@ export default function BookReader() {
         segments, 
         apiKeyRef.current, 
         speakerVoices,
-        (base64, segmentIndices) => {
+        (base64, chunkTimings) => {
           const url = pcmBase64ToWavBase64(base64, 24000);
           if (!firstChunkStarted && isPlayingRef.current) {
             firstChunkStarted = true;
@@ -691,11 +713,27 @@ export default function BookReader() {
             if (audioRef.current) {
               audioRef.current.src = url;
               audioRef.current.playbackRate = settingsRef.current.ttsSpeed;
+              
+              audioRef.current.onplay = () => {
+                const updateDramatizedHighlight = () => {
+                  if (!isPlayingRef.current || !audioRef.current) return;
+                  const currentTime = audioRef.current.currentTime;
+                  
+                  const activeTiming = chunkTimings.find(t => currentTime >= t.start && currentTime <= t.end);
+                  if (activeTiming && currentSegmentIndexRef.current !== activeTiming.segmentIdx) {
+                    setCurrentSegmentIndex(activeTiming.segmentIdx);
+                    currentSegmentIndexRef.current = activeTiming.segmentIdx;
+                  }
+                  animationFrameRef.current = requestAnimationFrame(updateDramatizedHighlight);
+                };
+                animationFrameRef.current = requestAnimationFrame(updateDramatizedHighlight);
+              };
+
               audioRef.current.play().catch(e => console.error("Initial play failed", e));
               isPlayingQueueRef.current = true;
             }
           } else {
-            audioQueueRef.current.push({ url, segmentIndices });
+            audioQueueRef.current.push({ url, timings: chunkTimings });
           }
         }
       );
@@ -1037,11 +1075,27 @@ export default function BookReader() {
     }
 
     const getHighlightClass = () => {
+      if (settings.highlightStyle === 'character-based' && currentSegmentIndex !== null && book.dramatization?.pages[currentPage]) {
+        const segments = book.dramatization.pages[currentPage].segments;
+        const currentSegment = segments[currentSegmentIndex];
+        const speaker = currentSegment.speaker;
+        const gender = book.dramatization.speakerGenders?.[speaker] || 'neutral';
+        
+        if (gender === 'female') {
+          return 'bg-pink-200 text-pink-900 rounded px-1 py-0.5'; // Pink for female
+        } else if (gender === 'male') {
+          return 'bg-blue-200 text-blue-900 rounded px-1 py-0.5'; // Light blue for male
+        } else {
+          return 'bg-emerald-200 text-emerald-900 rounded px-1 py-0.5'; // Light green for neutral/other
+        }
+      }
+
       switch (settings.highlightStyle) {
         case 'underline': return 'underline decoration-yellow-400 decoration-2 underline-offset-4';
         case 'bold': return 'font-bold text-zinc-900';
         case 'text-blue': return 'text-blue-600 font-medium';
         case 'yellow-bg':
+        case 'character-based': // Fallback if not in dramatized mode
         default: return 'bg-yellow-200 text-black rounded px-1 py-0.5';
       }
     };
@@ -1077,7 +1131,7 @@ export default function BookReader() {
       return { nodes, finalBold: isBold, finalUnderline: isUnderline, finalQuote: isQuote };
     };
 
-    if (currentSentenceIndex === null && highlightRange === null) {
+    if (currentSentenceIndex === null && currentSegmentIndex === null && highlightRange === null) {
       return renderRawText(processedText, false, false, false).nodes;
     }
 
@@ -1109,6 +1163,26 @@ export default function BookReader() {
     if (highlightRange) {
       startCleanIdx = highlightRange.start;
       endCleanIdx = highlightRange.end;
+    } else if (currentSegmentIndex !== null && book.dramatization?.pages[currentPage]) {
+      // Highlight by segment (Dramatized TTS)
+      const segments = book.dramatization.pages[currentPage].segments;
+      const currentSegment = segments[currentSegmentIndex];
+      
+      if (!currentSegment) return renderRawText(processedText, false, false, false).nodes;
+
+      let searchIdx = 0;
+      for (let i = 0; i < currentSegmentIndex; i++) {
+        const prevSegment = segments[i];
+        const idx = cleanText.indexOf(prevSegment.text, searchIdx);
+        if (idx !== -1) {
+          searchIdx = idx + prevSegment.text.length;
+        }
+      }
+
+      startCleanIdx = cleanText.indexOf(currentSegment.text, searchIdx);
+      if (startCleanIdx !== -1) {
+        endCleanIdx = startCleanIdx + currentSegment.text.length;
+      }
     } else if (currentSentenceIndex !== null) {
       // 2. Find sentence boundaries in clean text
       const sentences = getSentences(cleanText);
