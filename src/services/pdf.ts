@@ -322,24 +322,46 @@ function buildDisplayPages(paragraphs: string[]): DisplayPages {
   const pages: string[] = [];
   const chapters: { title: string; page: number }[] = [];
 
-  let currentParagraphs: string[] = [];
+  let currentParagraphs: { text: string; isHeading: boolean }[] = [];
   let currentChars = 0;
+  let hasContentOnPage = false;
 
   const flushPage = () => {
     if (currentParagraphs.length === 0) return;
-    pages.push(currentParagraphs.join("\n\n"));
+    
+    let pageContent = "";
+    for (let i = 0; i < currentParagraphs.length; i++) {
+      const p = currentParagraphs[i];
+      if (i > 0) {
+        // אם הפסקה הקודמת הייתה כותרת, נשתמש בירידת שורה אחת בלבד.
+        // אחרת, נשתמש בשתי ירידות שורה (שורה ריקה) להפרדה בין פסקאות.
+        const prevWasHeading = currentParagraphs[i - 1].isHeading;
+        pageContent += prevWasHeading ? "\n" : "\n\n";
+      }
+      pageContent += p.text;
+    }
+    
+    pages.push(pageContent);
     currentParagraphs = [];
     currentChars = 0;
+    hasContentOnPage = false;
   };
 
   for (const para of paragraphs) {
     const isChapterHeading = CHAPTER_HEADING_RE.test(para) || isLikelyHeading(para);
     const processedPara = isChapterHeading ? `<<BOLD_START>>${para}<<BOLD_END>>` : para;
 
-    // כותרת פרק: תמיד פותחת עמוד חדש
+    // כותרת פרק: פותחת עמוד חדש רק אם יש תוכן משמעותי בעמוד הנוכחי.
+    // זה מונע מצב של עמודים עם כותרת בלבד (כמו בתוכן עניינים או דפי שער).
     if (isChapterHeading) {
-      flushPage();
+      // אם יש תוכן (לא כותרות) או שהצטבר מספיק טקסט (מעל 1000 תווים), נפתח עמוד חדש.
+      // אחרת (למשל רשימת פרקים בתחילת ספר), נשאיר אותם יחד.
+      if (hasContentOnPage || currentChars > 1000) {
+        flushPage();
+      }
       chapters.push({ title: para, page: pages.length + 1 });
+    } else {
+      hasContentOnPage = true;
     }
 
     // פסקה ארוכה מאוד: נפצל אותה למשפטים כדי לא לחרוג מהמקסימום
@@ -354,7 +376,7 @@ function buildDisplayPages(paragraphs: string[]): DisplayPages {
         // אם המשפט עצמו ארוך מהמקסימום (נדיר מאוד), נאלץ לחתוך אותו
         if (trimmedSentence.length > MAX_PAGE_CHARS) {
           if (currentChunk.trim()) {
-            currentParagraphs.push(currentChunk.trim());
+            currentParagraphs.push({ text: currentChunk.trim(), isHeading: false });
             flushPage();
             currentChunk = "";
           }
@@ -362,7 +384,7 @@ function buildDisplayPages(paragraphs: string[]): DisplayPages {
           let remaining = trimmedSentence;
           while (remaining.length > 0) {
             const part = remaining.substring(0, MAX_PAGE_CHARS);
-            currentParagraphs.push(part);
+            currentParagraphs.push({ text: part, isHeading: false });
             flushPage();
             remaining = remaining.substring(MAX_PAGE_CHARS);
           }
@@ -374,7 +396,7 @@ function buildDisplayPages(paragraphs: string[]): DisplayPages {
           if (currentChars + currentChunk.length > MAX_PAGE_CHARS && currentChars >= MIN_PAGE_CHARS) {
             flushPage();
           }
-          currentParagraphs.push(currentChunk.trim());
+          currentParagraphs.push({ text: currentChunk.trim(), isHeading: false });
           currentChars += currentChunk.length + 2;
           
           if (currentChars >= TARGET_PAGE_CHARS) {
@@ -391,7 +413,7 @@ function buildDisplayPages(paragraphs: string[]): DisplayPages {
         if (currentChars + currentChunk.length > MAX_PAGE_CHARS && currentChars >= MIN_PAGE_CHARS) {
           flushPage();
         }
-        currentParagraphs.push(currentChunk.trim());
+        currentParagraphs.push({ text: currentChunk.trim(), isHeading: false });
         currentChars += currentChunk.length + 2;
       }
       continue;
@@ -405,7 +427,7 @@ function buildDisplayPages(paragraphs: string[]): DisplayPages {
       flushPage();
     }
 
-    currentParagraphs.push(processedPara);
+    currentParagraphs.push({ text: processedPara, isHeading: isChapterHeading });
     currentChars += processedPara.length + 2; // +2 לרווח הפסקה
   }
 

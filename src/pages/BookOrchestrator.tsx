@@ -13,6 +13,7 @@ const AVAILABLE_VOICES = [
   { id: 'Puck', name: 'Puck', description: 'Playful Neutral' },
   { id: 'Charon', name: 'Charon', description: 'Mature Male' },
   { id: 'Fenrir', name: 'Fenrir', description: 'Strong Male' },
+  { id: 'Aoede', name: 'Aoede', description: 'Vibrant Female' },
 ];
 
 export default function BookOrchestrator() {
@@ -208,7 +209,7 @@ export default function BookOrchestrator() {
     
     setShowDramatizeConfirm(false);
     setIsDramatizingFullBook(true);
-    setDramatizationProgress(0);
+    setDramatizationProgress(startFresh ? 0 : existingProgress);
     setCancelDramatization(false);
     cancelRef.current = false;
     
@@ -217,12 +218,17 @@ export default function BookOrchestrator() {
     let currentPagesDramatization = startFresh ? {} : { ...(book.dramatization?.pages || {}) };
     let latestBook = book;
     
-    const BATCH_SIZE = 2;
+    const BATCH_SIZE = 1;
+    let batchCount = 0;
+
+    let hasError = false;
 
     try {
       for (let i = 0; i < pages.length; i += BATCH_SIZE) {
         if (cancelRef.current) break;
+        batchCount++;
 
+        let newlyMarkedEmpty = false;
         const batchPages: { index: number, text: string }[] = [];
         for (let j = 0; j < BATCH_SIZE && (i + j) < pages.length; j++) {
           const pageIdx = i + j;
@@ -233,11 +239,34 @@ export default function BookOrchestrator() {
           const cleanText = getCleanText(pages[pageIdx]);
           if (cleanText.trim()) {
             batchPages.push({ index: pageIdx, text: cleanText });
+          } else {
+            // Mark empty pages as dramatized with empty segments so they count towards progress
+            currentPagesDramatization[pageIdx] = { segments: [] };
+            newlyMarkedEmpty = true;
           }
         }
 
         if (batchPages.length === 0) {
-          setDramatizationProgress(Math.min(100, Math.round(((i + BATCH_SIZE) / pages.length) * 100)));
+          if (newlyMarkedEmpty) {
+            // If we marked some empty pages, save them
+            const updatedDramatization = {
+              pages: currentPagesDramatization,
+              speakerVoices: currentSpeakerVoices,
+              speakerGenders: currentSpeakerGenders
+            };
+            const updatedBook = { ...latestBook, dramatization: updatedDramatization };
+            latestBook = updatedBook;
+            setBook(updatedBook);
+            updateBook(book.id, { dramatization: updatedDramatization });
+            
+            // Throttle Firestore saves: only save every 3 batches or at the end
+            if (batchCount % 3 === 0 || i + BATCH_SIZE >= pages.length) {
+              await db.saveBook(updatedBook);
+            }
+          }
+
+          const totalDone = Object.keys(currentPagesDramatization).length;
+          setDramatizationProgress(Math.min(100, Math.round((totalDone / pages.length) * 100)));
           continue;
         }
 
@@ -263,7 +292,7 @@ export default function BookOrchestrator() {
             currentPagesDramatization[pageData.pageIndex] = { segments: segmentsWithVoices };
           });
 
-          // Save incrementally after EVERY batch
+          // Save incrementally
           const updatedDramatization = {
             pages: currentPagesDramatization,
             speakerVoices: currentSpeakerVoices,
@@ -272,13 +301,25 @@ export default function BookOrchestrator() {
           const updatedBook = { ...latestBook, dramatization: updatedDramatization };
           latestBook = updatedBook;
           setBook(updatedBook);
-          await db.saveBook(updatedBook);
           updateBook(book.id, { dramatization: updatedDramatization });
+          
+          // Throttle Firestore saves: only save every 3 batches or at the end
+          if (batchCount % 3 === 0 || i + BATCH_SIZE >= pages.length) {
+            await db.saveBook(updatedBook);
+            // Give the write stream a moment to breathe after a large write
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
         }
         
-        setDramatizationProgress(Math.min(100, Math.round(((i + BATCH_SIZE) / pages.length) * 100)));
+        const totalDone = Object.keys(currentPagesDramatization).length;
+        setDramatizationProgress(Math.min(100, Math.round((totalDone / pages.length) * 100)));
+      }
+      
+      if (!cancelRef.current) {
+        setDramatizationProgress(100);
       }
     } catch (err: any) {
+      hasError = true;
       console.error("Full book dramatization failed", err);
       const errorStr = (err?.message || JSON.stringify(err)).toLowerCase();
       if (errorStr.includes('429') || errorStr.includes('resource_exhausted') || errorStr.includes('quota') || errorStr.includes('limit')) {
@@ -288,7 +329,9 @@ export default function BookOrchestrator() {
       }
     } finally {
       // Final save to ensure everything is in the store and DB
-      if (latestBook) {
+      // Only do this if we aren't already finishing normally (which saves in the loop)
+      // or if we were cancelled/errored.
+      if (latestBook && (cancelRef.current || hasError)) {
         setBook(latestBook);
         await db.saveBook(latestBook);
         updateBook(book.id, { dramatization: latestBook.dramatization });

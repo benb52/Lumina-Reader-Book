@@ -293,39 +293,52 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
 
   const response = await withRetry(() => ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: `Analyze the following book pages professionally. The book is written in ${language}. Break them down into segments and identify who is speaking each segment.
-    
-    GUIDELINES:
-    1. If it's the narrator, the speaker is "Narrator".
-    2. If it's a character, use their full name as mentioned in the text.
-    3. Be very precise about where a character starts and ends their speech.
-    4. For any NEW characters found (including "Narrator" if not in the list below), assign a voice from this list: ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr'].
-    5. Match the voice to the character's gender, age, and personality:
-       - 'Kore': Young/High-pitched female.
-       - 'Charon': Deep/Mature male.
-       - 'Puck': Playful/Gender-neutral or young.
-       - 'Fenrir': Gruff/Strong male.
-       - 'Zephyr': Soft/Calm female.
-    6. "Narrator" should usually be 'Zephyr' (calm female) or 'Charon' (mature male) unless context suggests otherwise.
-    7. Ensure the most dominant characters get unique voices if possible.
-    8. If multiple characters must share a voice, ensure they are not in the same scene together.
-    9. IMPORTANT: Group the segments by the page index provided in the markers.
-    10. Detect the gender of each character (male, female, or neutral).
-    11. DO NOT repeat the same text multiple times. Ensure the segments exactly reconstruct the original text.
-    12. Keep the JSON response as compact as possible.
-    
-    Existing character voices to maintain consistency: ${JSON.stringify({ Narrator: 'Zephyr', ...existingSpeakerVoices })}
-    
-    Text:
-    ${formattedPages}
-    
-    Return a JSON object with:
-    1. "pages": array of objects, each with "pageIndex" (number) and "segments" (array of { text: string, speaker: string })
-    2. "newSpeakerVoices": object mapping character names to suggested voices.
-    3. "speakerGenders": object mapping character names to gender ('male', 'female', or 'neutral').
-    `,
+    contents: {
+      parts: [
+        {
+          text: `Analyze the following book pages professionally. The book is written in ${language}. Break them down into segments and identify who is speaking each segment.
+          
+          GUIDELINES:
+          1. If it's the narrator, the speaker is "Narrator".
+          2. If it's a character, use their full name as mentioned in the text.
+          3. Be very precise about where a character starts and ends their speech.
+          4. For any NEW characters found (including "Narrator" if not in the list below), assign a voice from this list: ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr', 'Aoede'].
+          5. Match the voice to the character's gender, age, and personality:
+             - 'Kore': Young/High-pitched female.
+             - 'Charon': Deep/Mature male.
+             - 'Puck': Playful/Gender-neutral or young.
+             - 'Fenrir': Gruff/Strong male.
+             - 'Zephyr': Soft/Calm female.
+             - 'Aoede': Vibrant/Expressive female.
+          6. "Narrator" should usually be 'Zephyr' (calm female) or 'Charon' (mature male) unless context suggests otherwise.
+          7. Ensure the most dominant characters get unique voices if possible.
+          8. If multiple characters must share a voice, ensure they are not in the same scene together.
+          9. IMPORTANT: Group the segments by the page index provided in the markers.
+          10. Detect the gender of each character (male, female, or neutral).
+          11. DO NOT repeat the same text multiple times. Ensure the segments exactly reconstruct the original text.
+          12. Keep the JSON response as compact as possible.
+          13. DO NOT include any text outside of the JSON structure.
+          14. Each segment's text must be a verbatim excerpt from the original text.
+          15. IMPORTANT: Combine consecutive segments spoken by the same character into a single segment to keep the JSON response small.
+          16. The total number of segments per page should be kept to a minimum (ideally under 20).
+          17. Ensure all double quotes inside the text are properly escaped as \\" in the JSON.
+          18. Ensure there are no literal newlines inside the JSON strings; use \\n instead.
+          
+          Existing character voices to maintain consistency: ${JSON.stringify({ Narrator: 'Zephyr', ...existingSpeakerVoices })}
+          
+          Return a JSON object with:
+          1. "pages": array of objects, each with "pageIndex" (number) and "segments" (array of { text: string, speaker: string })
+          2. "newSpeakerVoices": object mapping character names to suggested voices.
+          3. "speakerGenders": object mapping character names to gender ('male', 'female', or 'neutral').`
+        },
+        {
+          text: `Text to analyze:\n${formattedPages}`
+        }
+      ]
+    },
     config: {
       responseMimeType: 'application/json',
+      maxOutputTokens: 16384,
       responseSchema: {
         type: Type.OBJECT,
         properties: {
@@ -360,10 +373,41 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
   }));
 
   try {
-    return JSON.parse(response.text || '{}');
+    let text = response.text || '{}';
+    // Clean up potential markdown blocks if the model ignored responseMimeType
+    if (text.includes('```json')) {
+      text = text.split('```json')[1].split('```')[0].trim();
+    } else if (text.includes('```')) {
+      text = text.split('```')[1].split('```')[0].trim();
+    }
+    
+    try {
+      return JSON.parse(text);
+    } catch (parseError) {
+      // Basic JSON repair for common AI mistakes
+      console.warn('Initial JSON parse failed, attempting repair...', parseError);
+      
+      // 1. Remove trailing commas in arrays/objects
+      let repaired = text.replace(/,(\s*[\]}])/g, '$1');
+      
+      // 2. Handle potential literal newlines in strings (very common)
+      // This is risky but can help if the model failed to escape
+      repaired = repaired.replace(/(?<=: \".*)\n(?=.*\"[,}\]])/g, '\\n');
+      
+      try {
+        return JSON.parse(repaired);
+      } catch (secondError) {
+        throw parseError; // Throw the original error if repair fails
+      }
+    }
   } catch (e) {
     console.error('Failed to parse batch speaker analysis', e);
-    return {};
+    console.log('Raw response length:', response.text?.length);
+    if (response.text) {
+      console.log('Raw response preview (first 500 chars):', response.text.substring(0, 500));
+      console.log('Raw response end (last 500 chars):', response.text.substring(Math.max(0, response.text.length - 500)));
+    }
+    throw new Error('Failed to parse AI response. The text might be too large or complex for a single batch.');
   }
 };
 
@@ -381,13 +425,14 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
     1. If it's the narrator, the speaker is "Narrator".
     2. If it's a character, use their full name as mentioned in the text.
     3. Be very precise about where a character starts and ends their speech.
-    4. For any NEW characters found (including "Narrator" if not in the list below), assign a voice from this list: ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr'].
+    4. For any NEW characters found (including "Narrator" if not in the list below), assign a voice from this list: ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr', 'Aoede'].
     5. Match the voice to the character's gender, age, and personality:
        - 'Kore': Young/High-pitched female.
        - 'Charon': Deep/Mature male.
        - 'Puck': Playful/Gender-neutral or young.
        - 'Fenrir': Gruff/Strong male.
        - 'Zephyr': Soft/Calm female.
+       - 'Aoede': Vibrant/Expressive female.
     6. "Narrator" should usually be 'Zephyr' (calm female) or 'Charon' (mature male) unless context suggests otherwise.
     7. Ensure the most dominant characters get unique voices if possible.
     8. If multiple characters must share a voice, ensure they are not in the same scene together.
