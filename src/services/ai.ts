@@ -283,6 +283,67 @@ export const getDefinition = async (word: string, context: string, apiKey: strin
   return response.text || '';
 };
 
+const repairJson = (jsonStr: string) => {
+  let repaired = jsonStr.trim();
+  
+  // 1. Remove trailing commas in arrays/objects
+  repaired = repaired.replace(/,(\s*[\]}])/g, '$1');
+  
+  // 2. Handle potential literal newlines in strings
+  repaired = repaired.replace(/(?<=: \".*)\n(?=.*\"[,}\]])/g, '\\n');
+
+  // 3. Fix truncated JSON by closing open braces/brackets
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  
+  for (let i = 0; i < repaired.length; i++) {
+    const char = repaired[i];
+    if (char === '"' && !escaped) {
+      inString = !inString;
+    } else if (!inString) {
+      if (char === '{' || char === '[') {
+        stack.push(char === '{' ? '}' : ']');
+      } else if (char === '}' || char === ']') {
+        if (stack.length > 0 && stack[stack.length - 1] === char) {
+          stack.pop();
+        }
+      }
+    }
+    escaped = char === '\\' && !escaped;
+  }
+  
+  if (inString) repaired += '"';
+  while (stack.length > 0) {
+    repaired += stack.pop();
+  }
+  
+  return repaired;
+};
+
+const parseWithRepair = (text: string) => {
+  try {
+    return JSON.parse(text);
+  } catch (parseError) {
+    console.warn('Initial JSON parse failed, attempting repair...', parseError);
+    const repaired = repairJson(text);
+    try {
+      return JSON.parse(repaired);
+    } catch (secondError) {
+      try {
+        const lastBrace = Math.max(text.lastIndexOf('}'), text.lastIndexOf(']'));
+        if (lastBrace !== -1) {
+          const partialRepaired = repairJson(text.substring(0, lastBrace + 1));
+          return JSON.parse(partialRepaired);
+        }
+      } catch (thirdError) {
+        // Fall through
+      }
+      throw parseError;
+    }
+  }
+};
+
 export const analyzeSpeakersBatch = async (pages: { index: number, text: string }[], apiKey: string, existingSpeakerVoices: { [name: string]: string } = {}, language: string = 'English') => {
   const finalApiKey = getEffectiveApiKey(apiKey);
   if (!finalApiKey) throw new Error('API Key required.');
@@ -381,25 +442,7 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
       text = text.split('```')[1].split('```')[0].trim();
     }
     
-    try {
-      return JSON.parse(text);
-    } catch (parseError) {
-      // Basic JSON repair for common AI mistakes
-      console.warn('Initial JSON parse failed, attempting repair...', parseError);
-      
-      // 1. Remove trailing commas in arrays/objects
-      let repaired = text.replace(/,(\s*[\]}])/g, '$1');
-      
-      // 2. Handle potential literal newlines in strings (very common)
-      // This is risky but can help if the model failed to escape
-      repaired = repaired.replace(/(?<=: \".*)\n(?=.*\"[,}\]])/g, '\\n');
-      
-      try {
-        return JSON.parse(repaired);
-      } catch (secondError) {
-        throw parseError; // Throw the original error if repair fails
-      }
-    }
+    return parseWithRepair(text);
   } catch (e) {
     console.error('Failed to parse batch speaker analysis', e);
     console.log('Raw response length:', response.text?.length);
@@ -452,6 +495,7 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
     `,
     config: {
       responseMimeType: 'application/json',
+      maxOutputTokens: 16384,
       responseSchema: {
         type: Type.OBJECT,
         properties: {
@@ -477,7 +521,13 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
   }));
 
   try {
-    return JSON.parse(response.text || '{}');
+    let text = response.text || '{}';
+    if (text.includes('```json')) {
+      text = text.split('```json')[1].split('```')[0].trim();
+    } else if (text.includes('```')) {
+      text = text.split('```')[1].split('```')[0].trim();
+    }
+    return parseWithRepair(text);
   } catch (e) {
     console.error('Failed to parse speaker analysis', e);
     return null;
