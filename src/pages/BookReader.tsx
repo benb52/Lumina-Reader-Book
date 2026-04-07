@@ -7,7 +7,7 @@ import { Button } from '../components/ui/Button';
 import QuotesPanel from '../components/QuotesPanel';
 import XRayPanel from '../components/XRayPanel';
 import { getDefinition, translateText, generateSpeech, translateSentencesBatch, analyzeBookWithAI, analyzeSpeakers, analyzeSpeakersBatch, generateMultiSpeakerSpeech } from '../services/ai';
-import { cn } from '../lib/utils';
+import { cn, getCleanText } from '../lib/utils';
 
 // Helper to convert raw PCM base64 to WAV base64 so the browser can play it
 const pcmBase64ToWavBase64 = (base64Pcm: string, sampleRate: number = 24000): string => {
@@ -214,7 +214,6 @@ export default function BookReader() {
           setIsPlaying(false);
           setCurrentSentenceIndex(null);
           setCurrentSegmentIndex(null);
-          setHighlightRange(null);
           highlightRangeRef.current = null;
         }
       }
@@ -259,6 +258,54 @@ export default function BookReader() {
       }
     }
   }, [currentSentenceIndex, currentSegmentIndex, isPlaying]);
+
+  // Sync highlight range when segment or sentence changes
+  useEffect(() => {
+    if (!pages[currentPage]) {
+      setHighlightRange(null);
+      return;
+    }
+    
+    const cleanText = getCleanText(pages[currentPage]);
+
+    if (currentSegmentIndex !== null && book?.dramatization?.pages[currentPage]) {
+      const segments = book.dramatization.pages[currentPage].segments;
+      const currentSegment = segments[currentSegmentIndex];
+      if (currentSegment) {
+        let searchIdx = 0;
+        for (let i = 0; i < currentSegmentIndex; i++) {
+          const prevSegment = segments[i];
+          const idx = cleanText.indexOf(prevSegment.text, searchIdx);
+          if (idx !== -1) {
+            searchIdx = idx + prevSegment.text.length;
+          }
+        }
+        const start = cleanText.indexOf(currentSegment.text, searchIdx);
+        if (start !== -1) {
+          setHighlightRange({ start, end: start + currentSegment.text.length });
+        }
+      }
+    } else if (currentSentenceIndex !== null) {
+      const sentences = getSentences(cleanText);
+      const currentSentence = sentences[currentSentenceIndex];
+      if (currentSentence) {
+        let searchIdx = 0;
+        for (let i = 0; i < currentSentenceIndex; i++) {
+          const prevSentence = sentences[i];
+          const idx = cleanText.indexOf(prevSentence, searchIdx);
+          if (idx !== -1) {
+            searchIdx = idx + prevSentence.length;
+          }
+        }
+        const start = cleanText.indexOf(currentSentence, searchIdx);
+        if (start !== -1) {
+          setHighlightRange({ start, end: start + currentSentence.length });
+        }
+      }
+    } else {
+      setHighlightRange(null);
+    }
+  }, [currentSentenceIndex, currentSegmentIndex, currentPage, pages, book]);
 
   const loadBook = async (bookId: string) => {
     const b = await db.getBook(bookId);
@@ -350,10 +397,6 @@ export default function BookReader() {
     }
   };
 
-  const getCleanText = (text: string) => {
-    return text.replace(/(<<BOLD_START>>|<<BOLD_END>>|<<UNDERLINE_START>>|<<UNDERLINE_END>>|<<QUOTE_START>>|<<QUOTE_END>>|<<PAGE:\d+>>)/g, '');
-  };
-
   const handleDramatizePage = async () => {
     if (!book || !apiKey) return null;
     setIsDramatizing(true);
@@ -365,12 +408,29 @@ export default function BookReader() {
       const result = await analyzeSpeakers(cleanText, apiKey, existingVoices, book.language || 'English');
       
       if (result && result.segments) {
-        const newSpeakerVoices = { ...existingVoices, ...result.newSpeakerVoices };
+        const newSpeakerVoices = { ...existingVoices, ...(result.newSpeakerVoices || {}) };
         const newSpeakerGenders = { ...existingGenders, ...(result.speakerGenders || {}) };
-        const segmentsWithVoices = result.segments.map((s: any) => ({
-          ...s,
-          voice: newSpeakerVoices[s.speaker] || 'Kore'
-        }));
+        
+        // Fallback voice assignment if AI missed some
+        const availableVoices = ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr', 'Aoede'];
+        const segmentsWithVoices = result.segments.map((s: any) => {
+          let voice = newSpeakerVoices[s.speaker];
+          
+          if (!voice) {
+            // Suggest based on gender
+            const gender = newSpeakerGenders[s.speaker] || 'neutral';
+            if (gender === 'female') voice = 'Zephyr';
+            else if (gender === 'male') voice = 'Charon';
+            else voice = 'Puck';
+            
+            newSpeakerVoices[s.speaker] = voice;
+          }
+          
+          return {
+            ...s,
+            voice
+          };
+        });
 
         const updatedDramatization = {
           pages: {
@@ -416,24 +476,43 @@ export default function BookReader() {
     const BATCH_SIZE = 1;
 
     try {
-      for (let i = 0; i < pages.length; i += BATCH_SIZE) {
+      // Find all pages that need dramatization
+      const pagesToDramatize = pages.map((p, i) => ({ index: i, text: p }))
+        .filter(p => startFresh || !currentPagesDramatization[p.index]);
+      
+      const totalToDramatize = pagesToDramatize.length;
+      let completedInThisSession = 0;
+
+      for (let i = 0; i < pagesToDramatize.length; i += BATCH_SIZE) {
         if (cancelRef.current) break;
 
         const batchPages: { index: number, text: string }[] = [];
-        for (let j = 0; j < BATCH_SIZE && (i + j) < pages.length; j++) {
-          const pageIdx = i + j;
-          // Skip pages that are already dramatized if not starting fresh
-          if (!startFresh && currentPagesDramatization[pageIdx]) {
-            continue;
-          }
-          const cleanText = getCleanText(pages[pageIdx]);
+        
+        // Determine how many pages to take for this batch
+        // If we are near the end (e.g. only 1 or 2 pages left beyond this batch), merge them
+        let currentBatchEnd = i + BATCH_SIZE;
+        const remainingAfterThisBatch = pagesToDramatize.length - currentBatchEnd;
+        
+        // If 2 or fewer pages are left after this batch, merge them into this batch
+        if (remainingAfterThisBatch > 0 && remainingAfterThisBatch <= 2) {
+          currentBatchEnd = pagesToDramatize.length;
+        }
+
+        for (let j = i; j < currentBatchEnd; j++) {
+          const page = pagesToDramatize[j];
+          const cleanText = getCleanText(page.text);
           if (cleanText.trim()) {
-            batchPages.push({ index: pageIdx, text: cleanText });
+            batchPages.push({ index: page.index, text: cleanText });
+          } else {
+            // Empty page, mark as narrator
+            currentPagesDramatization[page.index] = { segments: [{ text: page.text, speaker: 'Narrator', voice: currentSpeakerVoices['Narrator'] || 'Zephyr' }] };
           }
         }
 
         if (batchPages.length === 0) {
-          setDramatizationProgress(Math.min(100, Math.round(((i + BATCH_SIZE) / pages.length) * 100)));
+          completedInThisSession += (currentBatchEnd - i);
+          setDramatizationProgress(Math.min(100, Math.round((completedInThisSession / totalToDramatize) * 100)));
+          i = currentBatchEnd - BATCH_SIZE; // Adjust loop index
           continue;
         }
 
@@ -442,7 +521,21 @@ export default function BookReader() {
           await new Promise(resolve => setTimeout(resolve, 5000));
         }
 
-        const result = await analyzeSpeakersBatch(batchPages, apiKey, currentSpeakerVoices, book.language || 'English');
+        let result = null;
+        let retryCount = 0;
+        const maxRetries = 2;
+        
+        while (retryCount <= maxRetries) {
+          try {
+            result = await analyzeSpeakersBatch(batchPages, apiKey, currentSpeakerVoices, book.language || 'English');
+            break;
+          } catch (batchErr) {
+            retryCount++;
+            if (retryCount > maxRetries) throw batchErr;
+            console.warn(`Batch failed, retrying (${retryCount}/${maxRetries})...`, batchErr);
+            await new Promise(resolve => setTimeout(resolve, 3000 * retryCount));
+          }
+        }
         
         if (result && result.pages) {
           const newSpeakerVoices = { ...currentSpeakerVoices, ...(result.newSpeakerVoices || {}) };
@@ -451,10 +544,22 @@ export default function BookReader() {
           currentSpeakerGenders = newSpeakerGenders;
 
           result.pages.forEach((pageData: any) => {
-            const segmentsWithVoices = pageData.segments.map((s: any) => ({
-              ...s,
-              voice: newSpeakerVoices[s.speaker] || 'Kore'
-            }));
+            let voice = newSpeakerVoices[pageData.speaker] || 'Kore';
+            
+            const segmentsWithVoices = pageData.segments.map((s: any) => {
+              let sVoice = newSpeakerVoices[s.speaker];
+              if (!sVoice) {
+                const gender = newSpeakerGenders[s.speaker] || 'neutral';
+                if (gender === 'female') sVoice = 'Zephyr';
+                else if (gender === 'male') sVoice = 'Charon';
+                else sVoice = 'Puck';
+                newSpeakerVoices[s.speaker] = sVoice;
+              }
+              return {
+                ...s,
+                voice: sVoice
+              };
+            });
             currentPagesDramatization[pageData.pageIndex] = { segments: segmentsWithVoices };
           });
 
@@ -471,8 +576,13 @@ export default function BookReader() {
           updateBook(book.id, { dramatization: updatedDramatization });
         }
         
-        setDramatizationProgress(Math.min(100, Math.round(((i + BATCH_SIZE) / pages.length) * 100)));
+        completedInThisSession += (currentBatchEnd - i);
+        setDramatizationProgress(Math.min(100, Math.round((completedInThisSession / totalToDramatize) * 100)));
+        i = currentBatchEnd - BATCH_SIZE; // Adjust loop index
       }
+      
+      // Ensure 100% at the end
+      setDramatizationProgress(100);
     } catch (err: any) {
       console.error("Full book dramatization failed", err);
       const errorStr = (err?.message || JSON.stringify(err)).toLowerCase();
@@ -497,6 +607,7 @@ export default function BookReader() {
     if (currentPage < pages.length - 1) {
       const next = currentPage + 1;
       setCurrentPage(next);
+      setCurrentSegmentIndex(null);
       if (isPlayingRef.current) {
         saveProgress(next, 0);
         setCurrentSentenceIndex(0);
@@ -512,6 +623,7 @@ export default function BookReader() {
     if (currentPage > 0) {
       const next = currentPage - 1;
       setCurrentPage(next);
+      setCurrentSegmentIndex(null);
       if (isPlayingRef.current) {
         saveProgress(next, 0);
         setCurrentSentenceIndex(0);
@@ -637,6 +749,11 @@ export default function BookReader() {
   const startTTS = async (startIndex = 0) => {
     if (!pagesRef.current[currentPageRef.current]) return;
     
+    // Reset indices when starting new playback
+    setCurrentSentenceIndex(null);
+    setCurrentSegmentIndex(null);
+    setHighlightRange(null);
+
     if (settingsRef.current.ttsProvider === 'browser' && synthRef.current) {
       synthRef.current.cancel();
     }
@@ -686,6 +803,7 @@ export default function BookReader() {
     const dramatization = targetBook?.dramatization;
     if (!dramatization || !dramatization.pages[pageIndex]) return;
 
+    setCurrentSentenceIndex(null);
     const segments = dramatization.pages[pageIndex].segments;
     const speakerVoices = dramatization.speakerVoices || {};
     
@@ -746,6 +864,7 @@ export default function BookReader() {
   };
 
   const playWithGeminiTTS = async (sentences: string[], startGlobalIdx: number) => {
+    setCurrentSegmentIndex(null);
     const chunks = buildTtsChunks(sentences);
     
     let currentChunkIdx = chunks.findIndex(c => 
@@ -847,10 +966,6 @@ export default function BookReader() {
                 setCurrentSentenceIndex(activeGlobalIdx);
                 currentSentenceIndexRef.current = activeGlobalIdx;
                 
-                // Update highlight range for precise visual feedback
-                const r = sentenceRanges[activeLocalIdx];
-                setHighlightRange({ start: r.start, end: r.end });
-                
                 if (activeGlobalIdx % 5 === 0) {
                   saveProgress(currentPageRef.current, activeGlobalIdx);
                 }
@@ -874,7 +989,6 @@ export default function BookReader() {
           if (!isPlayingRef.current) return;
           currentChunkIdx++;
           localStartIdx = 0; 
-          setHighlightRange(null);
           
           if (currentChunkIdx >= chunks.length) {
              setCurrentSentenceIndex(null);
@@ -905,6 +1019,7 @@ export default function BookReader() {
   };
 
   const playWithBrowserTTS = (sentences: string[], startIdx: number) => {
+    setCurrentSegmentIndex(null);
     let currentIdx = startIdx;
 
     const playNext = async () => {
@@ -1223,7 +1338,10 @@ export default function BookReader() {
     return (
       <>
         {beforeRender.nodes}
-        <span className={cn("transition-colors duration-200", getHighlightClass())} data-highlighted="true">
+        <span 
+          className={cn("transition-colors duration-200", getHighlightClass())} 
+          data-highlighted="true"
+        >
           {highlightRender.nodes}
         </span>
         {afterRender.nodes}

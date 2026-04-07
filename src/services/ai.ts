@@ -286,22 +286,43 @@ export const getDefinition = async (word: string, context: string, apiKey: strin
 const repairJson = (jsonStr: string) => {
   let repaired = jsonStr.trim();
   
-  // 1. Remove trailing commas in arrays/objects
+  // 1. Remove potential markdown blocks
+  if (repaired.includes('```json')) {
+    repaired = repaired.split('```json')[1].split('```')[0].trim();
+  } else if (repaired.includes('```')) {
+    const parts = repaired.split('```');
+    if (parts.length >= 3) {
+      repaired = parts[1].trim();
+    } else {
+      repaired = parts[0].trim();
+    }
+  }
+
+  // 2. Remove trailing commas in arrays/objects
   repaired = repaired.replace(/,(\s*[\]}])/g, '$1');
   
-  // 2. Handle potential literal newlines in strings
-  repaired = repaired.replace(/(?<=: \".*)\n(?=.*\"[,}\]])/g, '\\n');
-
-  // 3. Fix truncated JSON by closing open braces/brackets
+  let result = '';
   const stack: string[] = [];
   let inString = false;
   let escaped = false;
   
   for (let i = 0; i < repaired.length; i++) {
     const char = repaired[i];
+    
     if (char === '"' && !escaped) {
       inString = !inString;
-    } else if (!inString) {
+      result += char;
+    } else if (inString) {
+      if (char === '\n') {
+        result += '\\n';
+      } else if (char === '\r') {
+        result += '\\r';
+      } else if (char === '\t') {
+        result += '\\t';
+      } else {
+        result += char;
+      }
+    } else {
       if (char === '{' || char === '[') {
         stack.push(char === '{' ? '}' : ']');
       } else if (char === '}' || char === ']') {
@@ -309,35 +330,53 @@ const repairJson = (jsonStr: string) => {
           stack.pop();
         }
       }
+      result += char;
     }
-    escaped = char === '\\' && !escaped;
+    
+    if (char === '\\') {
+      escaped = !escaped;
+    } else {
+      escaped = false;
+    }
   }
   
-  if (inString) repaired += '"';
+  if (inString) {
+    if (escaped) result = result.slice(0, -1);
+    result += '"';
+  }
+  
   while (stack.length > 0) {
-    repaired += stack.pop();
+    result += stack.pop();
   }
   
-  return repaired;
+  return result;
 };
 
 const parseWithRepair = (text: string) => {
+  if (!text || text.trim() === '') return {};
+  
   try {
+    // Try standard parse first
     return JSON.parse(text);
   } catch (parseError) {
     console.warn('Initial JSON parse failed, attempting repair...', parseError);
+    
+    // Attempt repair
     const repaired = repairJson(text);
     try {
       return JSON.parse(repaired);
     } catch (secondError) {
+      console.error('JSON repair failed', secondError);
+      
+      // Last ditch effort: try to find the last complete object/array
       try {
-        const lastBrace = Math.max(text.lastIndexOf('}'), text.lastIndexOf(']'));
+        const lastBrace = Math.max(repaired.lastIndexOf('}'), repaired.lastIndexOf(']'));
         if (lastBrace !== -1) {
-          const partialRepaired = repairJson(text.substring(0, lastBrace + 1));
-          return JSON.parse(partialRepaired);
+          const partial = repairJson(repaired.substring(0, lastBrace + 1));
+          return JSON.parse(partial);
         }
       } catch (thirdError) {
-        // Fall through
+        // Fall through to original error
       }
       throw parseError;
     }
@@ -434,14 +473,7 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
   }));
 
   try {
-    let text = response.text || '{}';
-    // Clean up potential markdown blocks if the model ignored responseMimeType
-    if (text.includes('```json')) {
-      text = text.split('```json')[1].split('```')[0].trim();
-    } else if (text.includes('```')) {
-      text = text.split('```')[1].split('```')[0].trim();
-    }
-    
+    const text = response.text || '{}';
     return parseWithRepair(text);
   } catch (e) {
     console.error('Failed to parse batch speaker analysis', e);
@@ -450,7 +482,7 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
       console.log('Raw response preview (first 500 chars):', response.text.substring(0, 500));
       console.log('Raw response end (last 500 chars):', response.text.substring(Math.max(0, response.text.length - 500)));
     }
-    throw new Error('Failed to parse AI response. The text might be too large or complex for a single batch.');
+    throw new Error('Failed to parse AI response. The text might be too large or complex for a single batch. Try reducing the batch size or simplifying the content.');
   }
 };
 
@@ -521,12 +553,7 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
   }));
 
   try {
-    let text = response.text || '{}';
-    if (text.includes('```json')) {
-      text = text.split('```json')[1].split('```')[0].trim();
-    } else if (text.includes('```')) {
-      text = text.split('```')[1].split('```')[0].trim();
-    }
+    const text = response.text || '{}';
     return parseWithRepair(text);
   } catch (e) {
     console.error('Failed to parse speaker analysis', e);

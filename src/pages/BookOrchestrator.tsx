@@ -5,7 +5,7 @@ import { useStore, Book } from '../store/useStore';
 import { db } from '../lib/db';
 import { Button } from '../components/ui/Button';
 import { analyzeSpeakers, analyzeSpeakersBatch, generateSpeech } from '../services/ai';
-import { cn } from '../lib/utils';
+import { cn, getCleanText } from '../lib/utils';
 
 const AVAILABLE_VOICES = [
   { id: 'Kore', name: 'Kore', description: 'Young Female' },
@@ -189,18 +189,6 @@ export default function BookOrchestrator() {
     }
   };
 
-  const getCleanText = (text: string) => {
-    return text
-      .replace(/<<PAGE:\d+>>/g, '')
-      .replace(/<<BOLD_START>>/g, '')
-      .replace(/<<BOLD_END>>/g, '')
-      .replace(/<<UNDERLINE_START>>/g, '')
-      .replace(/<<UNDERLINE_END>>/g, '')
-      .replace(/<<QUOTE_START>>/g, '')
-      .replace(/<<QUOTE_END>>/g, '')
-      .trim();
-  };
-
   const handleDramatizeFullBook = async (startFresh: boolean = false) => {
     if (!book || !apiKey || pages.length === 0) {
       if (!apiKey) setErrorMessage('API Key is required for AI analysis.');
@@ -275,7 +263,21 @@ export default function BookOrchestrator() {
           await new Promise(resolve => setTimeout(resolve, 3000));
         }
 
-        const result = await analyzeSpeakersBatch(batchPages, apiKey, currentSpeakerVoices, bookLanguage);
+        let result = null;
+        let retryCount = 0;
+        const maxRetries = 2;
+        
+        while (retryCount <= maxRetries) {
+          try {
+            result = await analyzeSpeakersBatch(batchPages, apiKey, currentSpeakerVoices, bookLanguage);
+            break;
+          } catch (batchErr) {
+            retryCount++;
+            if (retryCount > maxRetries) throw batchErr;
+            console.warn(`Batch failed, retrying (${retryCount}/${maxRetries})...`, batchErr);
+            await new Promise(resolve => setTimeout(resolve, 3000 * retryCount));
+          }
+        }
         
         if (result && result.pages) {
           const newSpeakerVoices = { ...currentSpeakerVoices, ...(result.newSpeakerVoices || {}) };
