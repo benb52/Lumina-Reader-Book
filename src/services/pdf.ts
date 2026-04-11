@@ -335,9 +335,12 @@ function buildDisplayPages(paragraphs: string[]): DisplayPages {
       if (i > 0) {
         const prevWasHeading = currentParagraphs[i - 1].isHeading;
         const currentIsHeading = p.isHeading;
-        // מניעת רווחים מיותרים סביב כותרות (BOLD_START)
-        // נשתמש בירידת שורה אחת בלבד אם אחת מהפסקאות היא כותרת כדי לשמור על רצף ויזואלי נקי.
-        if (prevWasHeading || currentIsHeading) {
+        
+        // מניעת רווחים מיותרים סביב כותרות או פסקאות שמתחילות בתגי עיצוב
+        const prevEndsWithTag = currentParagraphs[i - 1].text.endsWith("<<BOLD_END>>") || currentParagraphs[i - 1].text.endsWith("<<UNDERLINE_END>>");
+        const currentStartsWithTag = p.text.startsWith("<<BOLD_START>>") || p.text.startsWith("<<UNDERLINE_START>>");
+
+        if (prevWasHeading || currentIsHeading || prevEndsWithTag || currentStartsWithTag) {
           pageContent += "\n";
         } else {
           pageContent += "\n\n";
@@ -346,7 +349,7 @@ function buildDisplayPages(paragraphs: string[]): DisplayPages {
       pageContent += p.text;
     }
     
-    pages.push(pageContent);
+    pages.push(pageContent.trim());
     currentParagraphs = [];
     currentChars = 0;
     hasContentOnPage = false;
@@ -356,9 +359,10 @@ function buildDisplayPages(paragraphs: string[]): DisplayPages {
     const isChapterHeading = CHAPTER_HEADING_RE.test(para) || isLikelyHeading(para);
     const processedPara = isChapterHeading ? `<<BOLD_START>>${para}<<BOLD_END>>` : para;
 
-    // כותרת פרק: פותחת עמוד חדש רק אם העמוד הקודם מכיל מספיק תוכן.
+    // כותרת פרק: פותחת עמוד חדש רק אם העמוד הקודם מכיל מספיק תוכן משמעותי.
     if (isChapterHeading) {
-      const shouldFlush = currentChars > 600 || (hasContentOnPage && currentChars > 300);
+      // הגדלנו את הסף כדי למנוע עמודים דלילים מדי לפני פרק חדש
+      const shouldFlush = currentChars > 1000 || (hasContentOnPage && currentChars > 600);
       
       if (shouldFlush) {
         flushPage();
@@ -398,17 +402,17 @@ function buildDisplayPages(paragraphs: string[]): DisplayPages {
         
         if (currentChunk.length + trimmedSentence.length > MAX_PAGE_CHARS) {
           if (currentChars + currentChunk.length > MAX_PAGE_CHARS && currentChars >= MIN_PAGE_CHARS) {
-            // אם הפסקה האחרונה היא כותרת, נעביר אותה לעמוד הבא במקום להשאיר אותה לבד בסוף העמוד
-            let headingToMove: { text: string; isHeading: boolean } | null = null;
-            if (currentParagraphs.length > 0 && currentParagraphs[currentParagraphs.length - 1].isHeading) {
-              headingToMove = currentParagraphs.pop()!;
+            // העברת כותרות שנותרו בסוף העמוד לעמוד הבא
+            const headingsToMove: { text: string; isHeading: boolean }[] = [];
+            while (currentParagraphs.length > 0 && currentParagraphs[currentParagraphs.length - 1].isHeading) {
+              headingsToMove.unshift(currentParagraphs.pop()!);
             }
             
             flushPage();
             
-            if (headingToMove) {
-              currentParagraphs.push(headingToMove);
-              currentChars = headingToMove.text.length + 2;
+            if (headingsToMove.length > 0) {
+              currentParagraphs.push(...headingsToMove);
+              currentChars = headingsToMove.reduce((acc, h) => acc + h.text.length + 2, 0);
             }
           }
           currentParagraphs.push({ text: currentChunk.trim(), isHeading: false });
@@ -426,16 +430,16 @@ function buildDisplayPages(paragraphs: string[]): DisplayPages {
       
       if (currentChunk.trim()) {
         if (currentChars + currentChunk.length > MAX_PAGE_CHARS && currentChars >= MIN_PAGE_CHARS) {
-          let headingToMove: { text: string; isHeading: boolean } | null = null;
-          if (currentParagraphs.length > 0 && currentParagraphs[currentParagraphs.length - 1].isHeading) {
-            headingToMove = currentParagraphs.pop()!;
+          const headingsToMove: { text: string; isHeading: boolean }[] = [];
+          while (currentParagraphs.length > 0 && currentParagraphs[currentParagraphs.length - 1].isHeading) {
+            headingsToMove.unshift(currentParagraphs.pop()!);
           }
           
           flushPage();
           
-          if (headingToMove) {
-            currentParagraphs.push(headingToMove);
-            currentChars = headingToMove.text.length + 2;
+          if (headingsToMove.length > 0) {
+            currentParagraphs.push(...headingsToMove);
+            currentChars = headingsToMove.reduce((acc, h) => acc + h.text.length + 2, 0);
           }
         }
         currentParagraphs.push({ text: currentChunk.trim(), isHeading: false });
@@ -449,17 +453,16 @@ function buildDisplayPages(paragraphs: string[]): DisplayPages {
     const hasEnough   = currentChars >= MIN_PAGE_CHARS;
 
     if (wouldExceed && hasEnough) {
-      // אם הפסקה האחרונה היא כותרת, נעביר אותה לעמוד הבא
-      let headingToMove: { text: string; isHeading: boolean } | null = null;
-      if (currentParagraphs.length > 0 && currentParagraphs[currentParagraphs.length - 1].isHeading) {
-        headingToMove = currentParagraphs.pop()!;
+      const headingsToMove: { text: string; isHeading: boolean }[] = [];
+      while (currentParagraphs.length > 0 && currentParagraphs[currentParagraphs.length - 1].isHeading) {
+        headingsToMove.unshift(currentParagraphs.pop()!);
       }
       
       flushPage();
       
-      if (headingToMove) {
-        currentParagraphs.push(headingToMove);
-        currentChars = headingToMove.text.length + 2;
+      if (headingsToMove.length > 0) {
+        currentParagraphs.push(...headingsToMove);
+        currentChars = headingsToMove.reduce((acc, h) => acc + h.text.length + 2, 0);
       }
     }
 

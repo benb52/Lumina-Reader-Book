@@ -107,8 +107,9 @@ service cloud.firestore {
     
     function isAdmin() {
       return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true ||
-          (request.auth.token.email == "shakedbenb@gmail.com" && request.auth.token.email_verified == true));
+        ((exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isAdmin', false) == true) ||
+          (request.auth.token.email.lower() == "shakedbenb@gmail.com" && request.auth.token.email_verified == true));
     }
     
     function isValidEmail(email) {
@@ -203,16 +204,16 @@ service cloud.firestore {
         isValidString('senderName', 100);
         
       allow read, delete: if isAuthenticated() && 
-        (resource.data.targetEmail == request.auth.token.email || resource.data.senderId == request.auth.uid || isAdmin());
+        (resource.data.targetEmail == request.auth.token.email.lower() || resource.data.senderId == request.auth.uid || isAdmin());
         
       // Only allow status updates (e.g. 'accepted')
       allow update: if isAuthenticated() && 
-        (resource.data.targetEmail == request.auth.token.email || resource.data.senderId == request.auth.uid || isAdmin()) &&
+        (resource.data.targetEmail == request.auth.token.email.lower() || resource.data.senderId == request.auth.uid || isAdmin()) &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
         
       match /chunks/{chunkId} {
         allow read, write: if isAuthenticated() && 
-          (get(/databases/$(database)/documents/shared_books/$(shareId)).data.targetEmail == request.auth.token.email || 
+          (get(/databases/$(database)/documents/shared_books/$(shareId)).data.targetEmail == request.auth.token.email.lower() || 
            get(/databases/$(database)/documents/shared_books/$(shareId)).data.senderId == request.auth.uid || 
            isAdmin());
       }

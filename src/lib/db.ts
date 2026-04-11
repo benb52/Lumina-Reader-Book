@@ -1,5 +1,5 @@
 import { get, set, del, keys } from 'idb-keyval';
-import { Book, AppSettings, VocabularyWord } from '../store/useStore';
+import { Book, AppSettings, VocabularyWord, appStore } from '../store/useStore';
 import { db as firestore, auth } from './firebase';
 import { doc, setDoc, getDoc, deleteDoc, collection, getDocs, query, where, orderBy, increment, onSnapshot } from 'firebase/firestore';
 
@@ -32,6 +32,11 @@ interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errorMsg = error instanceof Error ? error.message : String(error);
+  if (errorMsg.toLowerCase().includes('offline') || errorMsg.toLowerCase().includes('unavailable')) {
+    appStore.getState().setIsFirestoreOffline(true);
+  }
+
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
@@ -73,6 +78,7 @@ export const db = {
     } catch (error: any) {
       if (error.code === 'permission-denied' || error.code === 'unavailable') {
         console.warn("Firebase permission denied or offline. Cannot get user metadata.");
+        if (error.code === 'unavailable') appStore.getState().setIsFirestoreOffline(true);
       } else {
         console.error("Error getting user metadata:", error);
       }

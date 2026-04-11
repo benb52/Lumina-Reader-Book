@@ -1,19 +1,21 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Save, X, ChevronLeft, ChevronRight, Trash, Plus, Bold, Underline, Sparkles, Loader2, User, Volume2, Play } from 'lucide-react';
+import { Save, X, ChevronLeft, ChevronRight, Trash, Plus, Bold, Underline, Sparkles, Loader2, User, Volume2, Play, Check, Captions } from 'lucide-react';
 import { useStore, Book } from '../store/useStore';
 import { db } from '../lib/db';
 import { Button } from '../components/ui/Button';
-import { analyzeSpeakers, analyzeSpeakersBatch, generateSpeech } from '../services/ai';
-import { cn, getCleanText } from '../lib/utils';
+import { analyzeSpeakers, analyzeSpeakersBatch, generateSpeech, translateSentencesBatch } from '../services/ai';
+import { cn, getCleanText, getSentences } from '../lib/utils';
 
-const AVAILABLE_VOICES = [
-  { id: 'Kore', name: 'Kore', description: 'Young Female' },
-  { id: 'Zephyr', name: 'Zephyr', description: 'Calm Female' },
-  { id: 'Puck', name: 'Puck', description: 'Playful Neutral' },
-  { id: 'Charon', name: 'Charon', description: 'Mature Male' },
-  { id: 'Fenrir', name: 'Fenrir', description: 'Strong Male' },
-  { id: 'Aoede', name: 'Aoede', description: 'Vibrant Female' },
+const getAvailableVoices = (isHebrew: boolean) => [
+  { id: 'Kore', name: 'Kore', description: isHebrew ? 'אישה צעירה' : 'Young Female' },
+  { id: 'Zephyr', name: 'Zephyr', description: isHebrew ? 'אישה רגועה' : 'Calm Female' },
+  { id: 'Puck', name: 'Puck', description: isHebrew ? 'קול שובב' : 'Playful Neutral' },
+  { id: 'Charon', name: 'Charon', description: isHebrew ? 'גבר בוגר' : 'Mature Male' },
+  { id: 'Fenrir', name: 'Fenrir', description: isHebrew ? 'גבר חזק' : 'Strong Male' },
+  { id: 'Aoede', name: 'Aoede', description: isHebrew ? 'אישה תוססת' : 'Vibrant Female' },
+  { id: 'Orpheus', name: 'Orpheus', description: isHebrew ? 'גבר דרמטי' : 'Expressive Male' },
+  { id: 'Cassiopeia', name: 'Cassiopeia', description: isHebrew ? 'אישה אלגנטית' : 'Elegant Female' },
 ];
 
 export default function BookOrchestrator() {
@@ -35,6 +37,27 @@ export default function BookOrchestrator() {
   const [bookCoverUrl, setBookCoverUrl] = useState<string>('');
   const [bookLanguage, setBookLanguage] = useState<string>('');
   const [textDirection, setTextDirection] = useState<'ltr' | 'rtl'>('ltr');
+  const [keriKetivEnabled, setKeriKetivEnabled] = useState<boolean>(true);
+  const [isDramatizedReadingEnabled, setIsDramatizedReadingEnabled] = useState<boolean>(false);
+  const [ttsProvider, setTtsProvider] = useState<'browser' | 'gemini'>('browser');
+  const [aiChunkSizeMultiplier, setAiChunkSizeMultiplier] = useState<number>(1);
+  const [geminiVoice, setGeminiVoice] = useState<'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' | 'Aoede' | 'Orpheus' | 'Cassiopeia'>('Zephyr');
+  const [targetSubtitleLanguage, setTargetSubtitleLanguage] = useState<string>('Hebrew');
+  const [isGeneratingSubtitles, setIsGeneratingSubtitles] = useState(false);
+  const [subtitleProgress, setSubtitleProgress] = useState(0);
+  const [availableBrowserVoices, setAvailableBrowserVoices] = useState<SpeechSynthesisVoice[]>([]);
+
+  useEffect(() => {
+    const loadVoices = () => {
+      const voices = window.speechSynthesis.getVoices();
+      setAvailableBrowserVoices(voices);
+    };
+    loadVoices();
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+    return () => {
+      window.speechSynthesis.onvoiceschanged = null;
+    };
+  }, []);
 
   const [isDramatizingFullBook, setIsDramatizingFullBook] = useState(false);
   const [dramatizationProgress, setDramatizationProgress] = useState(0);
@@ -43,6 +66,7 @@ export default function BookOrchestrator() {
   const [showDramatizeConfirm, setShowDramatizeConfirm] = useState(false);
   
   const [speakerVoices, setSpeakerVoices] = useState<{ [name: string]: string }>({});
+  const [speakerGenders, setSpeakerGenders] = useState<{ [name: string]: 'male' | 'female' | 'neutral' }>({});
   const [isPreviewingVoice, setIsPreviewingVoice] = useState<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
 
@@ -65,14 +89,20 @@ export default function BookOrchestrator() {
       setBookCoverUrl(b.coverUrl || '');
       setBookLanguage(b.language || '');
       setTextDirection(b.textDirection || 'ltr');
+      setKeriKetivEnabled(b.keriKetivEnabled !== false);
+      setIsDramatizedReadingEnabled(!!b.isDramatizedReadingEnabled);
+      setTtsProvider(b.ttsProvider || settings.ttsProvider || 'browser');
+      setAiChunkSizeMultiplier(b.aiChunkSizeMultiplier || settings.aiChunkSizeMultiplier || 1);
+      setGeminiVoice(b.geminiVoice || settings.geminiVoice || 'Zephyr');
       
       const voices = b.dramatization?.speakerVoices || {};
       const genders = b.dramatization?.speakerGenders || {};
-      if (b.dramatization && !voices['Narrator']) {
+      if (!voices['Narrator']) {
         voices['Narrator'] = 'Zephyr';
         genders['Narrator'] = 'female';
       }
       setSpeakerVoices(voices);
+      setSpeakerGenders(genders);
       
       // Split content by our marker
       const pgs = b.content.split('<<LUMINA_PAGE_BREAK>>').filter(p => p.trim() !== '');
@@ -143,6 +173,73 @@ export default function BookOrchestrator() {
     setPageToDelete(false);
   };
 
+  const handleGenerateSubtitles = async () => {
+    if (!book || !apiKey || pages.length === 0) {
+      if (!apiKey) setErrorMessage('API Key is required for translation.');
+      return;
+    }
+
+    setIsGeneratingSubtitles(true);
+    setSubtitleProgress(0);
+    
+    let currentSubtitles = { ...(book.subtitles?.[targetSubtitleLanguage]?.pages || {}) };
+    let latestBook = book;
+
+    try {
+      for (let i = 0; i < pages.length; i++) {
+        if (cancelRef.current) break;
+
+        const cleanText = getCleanText(pages[i]);
+        if (!cleanText.trim()) {
+          currentSubtitles[i] = '';
+          setSubtitleProgress(Math.round(((i + 1) / pages.length) * 100));
+          continue;
+        }
+
+        // Split into sentences for better translation quality
+        const sentences = getSentences(cleanText);
+        const translatedSentences = await translateSentencesBatch(sentences, targetSubtitleLanguage, apiKey);
+        
+        if (translatedSentences && translatedSentences.length > 0) {
+          currentSubtitles[i] = translatedSentences;
+        }
+
+        // Save incrementally every 5 pages
+        if ((i + 1) % 5 === 0 || i === pages.length - 1) {
+          const updatedSubtitles = {
+            ...(latestBook.subtitles || {}),
+            [targetSubtitleLanguage]: {
+              pages: currentSubtitles,
+              lastUpdated: Date.now()
+            }
+          };
+          const updatedBook = { ...latestBook, subtitles: updatedSubtitles };
+          latestBook = updatedBook;
+          setBook(updatedBook);
+          updateBook(book.id, { subtitles: updatedSubtitles });
+          await db.saveBook(updatedBook);
+        }
+
+        setSubtitleProgress(Math.round(((i + 1) / pages.length) * 100));
+      }
+    } catch (err) {
+      console.error("Subtitle generation failed", err);
+      setErrorMessage("Failed to generate subtitles. Progress has been saved.");
+    } finally {
+      setIsGeneratingSubtitles(false);
+    }
+  };
+
+  const handleDeleteSubtitles = async (lang: string) => {
+    if (!book) return;
+    const updatedSubtitles = { ...(book.subtitles || {}) };
+    delete updatedSubtitles[lang];
+    const updatedBook = { ...book, subtitles: updatedSubtitles };
+    setBook(updatedBook);
+    updateBook(book.id, { subtitles: updatedSubtitles });
+    await db.saveBook(updatedBook);
+  };
+
   const handleSave = async () => {
     if (!book) return;
     setIsSaving(true);
@@ -167,6 +264,11 @@ export default function BookOrchestrator() {
         totalPages: pages.length,
         language: bookLanguage,
         textDirection,
+        keriKetivEnabled,
+        isDramatizedReadingEnabled,
+        ttsProvider,
+        aiChunkSizeMultiplier,
+        geminiVoice,
         dramatization: updatedDramatization
       };
       await db.saveBook(updatedBook);
@@ -178,6 +280,11 @@ export default function BookOrchestrator() {
         totalPages: updatedBook.totalPages,
         language: bookLanguage,
         textDirection,
+        keriKetivEnabled,
+        isDramatizedReadingEnabled,
+        ttsProvider,
+        aiChunkSizeMultiplier,
+        geminiVoice,
         dramatization: updatedDramatization
       });
       navigate('/', { state: { message: `Book "${bookTitle}" saved successfully!` } });
@@ -348,10 +455,28 @@ export default function BookOrchestrator() {
   };
 
   const previewVoice = async (voiceName: string) => {
-    if (!apiKey) return;
     setIsPreviewingVoice(voiceName);
     try {
-      const text = `Hello, I am ${voiceName}. This is how I sound in the dramatized reading.`;
+      const isHebrew = bookLanguage.toLowerCase() === 'hebrew';
+      const text = isHebrew 
+        ? `שלום, אני ${voiceName}. ככה אני נשמע בקריאה של הספר.`
+        : `Hello, I am ${voiceName}. This is how I sound in the reading of the book.`;
+
+      if (settings.ttsProvider === 'browser') {
+        const utterance = new SpeechSynthesisUtterance(text);
+        const selectedVoice = availableBrowserVoices.find(v => v.name === voiceName);
+        if (selectedVoice) utterance.voice = selectedVoice;
+        utterance.onend = () => setIsPreviewingVoice(null);
+        utterance.onerror = () => setIsPreviewingVoice(null);
+        window.speechSynthesis.speak(utterance);
+        return;
+      }
+
+      if (!apiKey) {
+        setIsPreviewingVoice(null);
+        return;
+      }
+
       const base64Audio = await generateSpeech(text, voiceName, apiKey);
       
       if (base64Audio) {
@@ -492,7 +617,7 @@ export default function BookOrchestrator() {
               value={bookLanguage}
               onChange={(e) => {
                 setBookLanguage(e.target.value);
-                if (e.target.value === 'Hebrew') {
+                if (e.target.value === 'Hebrew' || e.target.value === 'Arabic') {
                   setTextDirection('rtl');
                 } else {
                   setTextDirection('ltr');
@@ -505,9 +630,27 @@ export default function BookOrchestrator() {
               <option value="Spanish">Spanish</option>
               <option value="French">French</option>
               <option value="German">German</option>
+              <option value="Russian">Russian</option>
+              <option value="Arabic">Arabic</option>
+              <option value="Italian">Italian</option>
+              <option value="Portuguese">Portuguese</option>
+              <option value="Japanese">Japanese</option>
+              <option value="Chinese">Chinese</option>
               <option value="Other">Other</option>
             </select>
           </div>
+          {bookLanguage === 'Hebrew' && (
+            <div className="flex items-center gap-2 mr-4">
+              <input 
+                type="checkbox" 
+                id="keriKetiv" 
+                checked={keriKetivEnabled} 
+                onChange={(e) => setKeriKetivEnabled(e.target.checked)}
+                className="w-4 h-4 text-purple-600 border-zinc-300 rounded focus:ring-purple-500"
+              />
+              <label htmlFor="keriKetiv" className="text-sm text-zinc-600 cursor-pointer">Keri/Ketiv Correction</label>
+            </div>
+          )}
           <Button 
             variant="outline" 
             onClick={() => setShowDramatizeConfirm(true)} 
@@ -519,11 +662,11 @@ export default function BookOrchestrator() {
           >
             <Sparkles size={16} className="mr-2" /> 
             {isDramatizingFullBook 
-              ? `Dramatizing (${dramatizationProgress}%)` 
+              ? (dramatizationProgress === 100 ? <span className="flex items-center gap-1">Dramatized <Check size={14} /></span> : `Dramatizing (${dramatizationProgress}%)`)
               : existingProgress > 0 && existingProgress < 100 
                 ? `Continue Dramatization (${existingProgress}%)` 
-                : existingProgress === 100 
-                  ? 'Redo Dramatization' 
+                : (existingProgress === 100 || (book.dramatization?.pages && Object.keys(book.dramatization.pages).length === pages.length))
+                  ? <span className="flex items-center gap-1">Redo Dramatization <Check size={14} className="text-emerald-500" /></span>
                   : 'Dramatize Book (AI)'}
           </Button>
           <Button variant="outline" onClick={() => navigate(`/book/${book.id}`)} className="flex-1 sm:flex-none justify-center">
@@ -572,54 +715,203 @@ export default function BookOrchestrator() {
               />
             </div>
           </div>
+          <div className="mt-4 pt-4 border-t border-zinc-100 flex items-center justify-between">
+            <div className="flex flex-col">
+              <span className="text-sm font-medium text-zinc-900">Dramatized Reading (AI)</span>
+              <span className="text-xs text-zinc-500">Use different voices for different characters in this book.</span>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input 
+                type="checkbox" 
+                className="sr-only peer" 
+                checked={isDramatizedReadingEnabled}
+                onChange={(e) => setIsDramatizedReadingEnabled(e.target.checked)}
+              />
+              <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+            </label>
+          </div>
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm border border-zinc-200 p-4 shrink-0">
           <h2 className="text-sm font-semibold text-zinc-900 mb-3 flex items-center gap-2">
-            <User size={16} className="text-purple-600" /> Character Voices
+            <Sparkles size={16} className="text-amber-500" /> Advanced & AI Settings
           </h2>
-          {Object.keys(speakerVoices).length === 0 ? (
-            <div className="text-center py-6 bg-zinc-50 rounded-xl border border-dashed border-zinc-200">
-              <p className="text-sm text-zinc-500">No characters detected yet. Run "Dramatize Book (AI)" to identify characters.</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 mb-1">
+                TTS Provider for this Book
+              </label>
+              <select
+                value={ttsProvider}
+                onChange={(e) => setTtsProvider(e.target.value as any)}
+                className="w-full px-3 py-2 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white"
+              >
+                <option value="browser">Browser Native</option>
+                <option value="gemini">Gemini API (High Quality)</option>
+              </select>
+              <p className="text-[10px] text-zinc-500 mt-1">
+                Choose how this book should be read. Gemini API provides much better quality but uses API calls.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 mb-1">
+                AI Context Size (Save API Calls)
+              </label>
+              <select
+                value={aiChunkSizeMultiplier}
+                onChange={(e) => setAiChunkSizeMultiplier(parseInt(e.target.value))}
+                className="w-full px-3 py-2 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white"
+              >
+                <option value="1">1x (Default - Faster)</option>
+                <option value="2">2x (Longer context)</option>
+                <option value="3">3x (Max context - Saves calls)</option>
+              </select>
+              <p className="text-[10px] text-zinc-500 mt-1">
+                Send more text to Gemini at once to reduce the number of API calls for this specific book.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl shadow-sm border border-zinc-200 p-4 shrink-0">
+          <h2 className="text-sm font-semibold text-zinc-900 mb-3 flex items-center gap-2">
+            <User size={16} className="text-purple-600" /> {isDramatizedReadingEnabled ? 'Character Voices (AI Managed)' : 'Book Voice'}
+          </h2>
+          
+          {isDramatizedReadingEnabled ? (
+            <div className="p-6 bg-zinc-50 rounded-xl border border-dashed border-zinc-200 flex flex-col items-center text-center">
+              <div className="bg-purple-100 text-purple-600 p-3 rounded-full mb-3">
+                <Sparkles size={24} />
+              </div>
+              <p className="text-sm font-medium text-zinc-900">AI Dramatization is Active</p>
+              <p className="text-xs text-zinc-500 mt-1 max-w-xs">
+                Character voices are automatically identified and assigned by AI. There is no need to manually define them here.
+              </p>
+              {Object.keys(speakerVoices).length > 1 && (
+                <div className="mt-4 flex flex-wrap justify-center gap-2">
+                  {Object.keys(speakerVoices).filter(s => s !== 'Narrator').slice(0, 5).map(s => (
+                    <span key={s} className="px-2 py-1 bg-white border border-zinc-200 rounded-md text-[10px] text-zinc-600 font-medium">
+                      {s}
+                    </span>
+                  ))}
+                  {Object.keys(speakerVoices).length > 6 && (
+                    <span className="px-2 py-1 bg-white border border-zinc-200 rounded-md text-[10px] text-zinc-400">
+                      +{Object.keys(speakerVoices).length - 6} more
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {Object.entries(speakerVoices).map(([speaker, voice]) => {
-                const currentVoice = voice as string;
-                return (
-                  <div key={speaker} className="flex items-center justify-between p-3 bg-zinc-50 rounded-xl border border-zinc-100 group">
-                    <div className="flex flex-col min-w-0">
-                      <span className="text-xs font-bold text-zinc-900 truncate">{speaker}</span>
-                      <div className="flex items-center gap-1 mt-1">
-                        <select
-                          value={currentVoice}
-                          onChange={(e) => handleVoiceChange(speaker, e.target.value)}
-                          className="text-[11px] bg-transparent border-none p-0 focus:ring-0 text-zinc-500 cursor-pointer hover:text-purple-600 transition-colors"
-                        >
-                          {AVAILABLE_VOICES.map(v => (
-                            <option key={v.id} value={v.id}>{v.name} ({v.description})</option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => previewVoice(currentVoice)}
-                      disabled={isPreviewingVoice === currentVoice}
-                      className="h-8 w-8 p-0 rounded-lg bg-white shadow-sm border border-zinc-100 hover:bg-purple-50 hover:text-purple-600 transition-all"
-                    >
-                      {isPreviewingVoice === currentVoice ? (
-                        <Loader2 size={14} className="animate-spin" />
-                      ) : (
-                        <Volume2 size={14} />
-                      )}
-                    </Button>
-                  </div>
-                );
-              })}
+            <div className="max-w-xs">
+              <label className="text-xs font-medium text-zinc-700 mb-1.5 block">Select Voice for this Book</label>
+              <div className="flex items-center gap-3">
+                <select
+                  value={speakerVoices['Narrator'] || (settings.ttsProvider === 'gemini' ? 'Zephyr' : '')}
+                  onChange={(e) => handleVoiceChange('Narrator', e.target.value)}
+                  className="flex-1 px-3 py-2 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white"
+                >
+                  {settings.ttsProvider === 'gemini' ? (
+                    getAvailableVoices(bookLanguage.toLowerCase() === 'hebrew').map(v => (
+                      <option key={v.id} value={v.id}>{v.name} ({v.description})</option>
+                    ))
+                  ) : (
+                    <>
+                      <option value="">Default Browser Voice</option>
+                      {availableBrowserVoices
+                        .filter(v => bookLanguage.toLowerCase() === 'hebrew' ? v.lang.startsWith('he') : true)
+                        .map(v => (
+                          <option key={v.name} value={v.name}>{v.name}</option>
+                        ))
+                      }
+                    </>
+                  )}
+                </select>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => previewVoice(speakerVoices['Narrator'] || 'Zephyr')}
+                  disabled={isPreviewingVoice === (speakerVoices['Narrator'] || 'Zephyr')}
+                  className="h-9 w-9 p-0 rounded-lg bg-white shadow-sm border border-zinc-100 hover:bg-purple-50 hover:text-purple-600 transition-all"
+                >
+                  {isPreviewingVoice === (speakerVoices['Narrator'] || 'Zephyr') ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <Volume2 size={14} />
+                  )}
+                </Button>
+              </div>
             </div>
           )}
+        </div>
+
+        <div className="bg-white rounded-2xl shadow-sm border border-zinc-200 p-4 shrink-0">
+          <h2 className="text-sm font-semibold text-zinc-900 mb-3 flex items-center gap-2">
+            <Captions size={16} className="text-blue-600" /> Subtitles & Translation
+          </h2>
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+            <div className="flex flex-col gap-1.5 flex-1">
+              <label className="text-xs font-medium text-zinc-700">Target Language</label>
+              <select
+                value={targetSubtitleLanguage}
+                onChange={(e) => setTargetSubtitleLanguage(e.target.value)}
+                className="px-3 py-2 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white w-full"
+              >
+                <option value="Hebrew">Hebrew</option>
+                <option value="English">English</option>
+                <option value="Spanish">Spanish</option>
+                <option value="French">French</option>
+                <option value="German">German</option>
+                <option value="Russian">Russian</option>
+                <option value="Arabic">Arabic</option>
+                <option value="Italian">Italian</option>
+                <option value="Portuguese">Portuguese</option>
+                <option value="Japanese">Japanese</option>
+                <option value="Chinese">Chinese</option>
+              </select>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-zinc-700 invisible">Action</label>
+              <Button 
+                onClick={handleGenerateSubtitles} 
+                disabled={isGeneratingSubtitles || isSaving}
+                className="bg-blue-600 hover:bg-blue-700 text-white border-transparent"
+              >
+                {isGeneratingSubtitles ? (
+                  <><Loader2 size={16} className="mr-2 animate-spin" /> Generating ({subtitleProgress}%)</>
+                ) : (
+                  <><Sparkles size={16} className="mr-2" /> Generate Stored Subtitles</>
+                )}
+              </Button>
+            </div>
+          </div>
+          {book.subtitles?.[targetSubtitleLanguage] && (
+            <div className="mt-3 p-3 bg-blue-50 rounded-xl border border-blue-100 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-blue-700">
+                <Check size={14} className="text-emerald-500" />
+                <span className="text-xs font-medium">
+                  Subtitles for {targetSubtitleLanguage} are ready ({Object.keys(book.subtitles[targetSubtitleLanguage].pages).length} pages)
+                </span>
+              </div>
+              <div className="flex items-center gap-3">
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={() => handleDeleteSubtitles(targetSubtitleLanguage)}
+                  className="h-7 px-2 text-[10px] text-red-600 hover:text-red-700 hover:bg-red-50"
+                >
+                  Delete
+                </Button>
+                <span className="text-[10px] text-blue-400">
+                  Last updated: {new Date(book.subtitles[targetSubtitleLanguage].lastUpdated).toLocaleDateString()}
+                </span>
+              </div>
+            </div>
+          )}
+          <p className="text-[10px] text-zinc-500 mt-3 italic">
+            Generating subtitles saves them to the database so they don't need to be translated on-the-fly while reading.
+          </p>
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm border border-zinc-200 flex-1 flex flex-col min-h-[70vh]">
@@ -691,7 +983,7 @@ export default function BookOrchestrator() {
                 </div>
                 <div className="flex justify-between text-sm font-medium text-zinc-600 mb-8">
                   <span>Progress</span>
-                  <span>{dramatizationProgress}%</span>
+                  <span>{dramatizationProgress === 100 ? <Check size={18} className="text-emerald-500" /> : `${dramatizationProgress}%`}</span>
                 </div>
 
                 <Button 

@@ -66,9 +66,9 @@ export default function Layout() {
         </nav>
 
         <div className="flex items-center gap-4">
-          <div className="hidden md:flex flex-col items-end">
+          <div className="hidden md:flex flex-col items-end group cursor-default">
             <span className="text-sm font-medium text-zinc-900">{user?.name || user?.email}</span>
-            <span className="text-xs text-zinc-500">{user?.email}</span>
+            <span className="text-xs text-zinc-500 opacity-0 group-hover:opacity-100 transition-opacity duration-200 select-none">{user?.email}</span>
           </div>
           <button
             onClick={handleLogout}
@@ -108,9 +108,9 @@ export default function Layout() {
             );
           })}
           <div className="h-px bg-zinc-200 my-2" />
-          <div className="px-4 py-2 flex flex-col">
+          <div className="px-4 py-2 flex flex-col group cursor-default">
             <span className="text-sm font-medium text-zinc-900">{user?.name || user?.email}</span>
-            <span className="text-xs text-zinc-500">{user?.email}</span>
+            <span className="text-xs text-zinc-500 opacity-0 group-hover:opacity-100 transition-opacity duration-200 select-none">{user?.email}</span>
           </div>
           <button
             onClick={() => {

@@ -17,7 +17,16 @@ export default function XRayPanel({
   onClose: () => void,
   onUpdateVoice?: (name: string, voice: string) => void
 }) {
-  const voices = ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr', 'Aoede'];
+  const voices = [
+    { id: 'Puck', label: 'Puck (Male)' },
+    { id: 'Charon', label: 'Charon (Male)' },
+    { id: 'Kore', label: 'Kore (Female)' },
+    { id: 'Fenrir', label: 'Fenrir (Male)' },
+    { id: 'Zephyr', label: 'Zephyr (Female)' },
+    { id: 'Aoede', label: 'Aoede (Female)' },
+    { id: 'Orpheus', label: 'Orpheus (Male)' },
+    { id: 'Cassiopeia', label: 'Cassiopeia (Female)' }
+  ];
 
   return (
     <div className="absolute top-0 right-0 h-full w-80 bg-white border-l border-zinc-200 shadow-xl flex flex-col z-40 animate-in slide-in-from-right">
@@ -41,7 +50,7 @@ export default function XRayPanel({
             {data.speakerVoices && Object.keys(data.speakerVoices).length > 0 && (
               <section>
                 <h3 className="text-sm font-semibold text-zinc-900 uppercase tracking-wider mb-3 flex items-center gap-2">
-                  <Sparkles size={16} className="text-emerald-500" /> Cast & Voices
+                  <Sparkles size={16} className="text-emerald-500" /> Character Voices
                 </h3>
                 <div className="space-y-2">
                   {Object.entries(data.speakerVoices).map(([name, voice]) => (
@@ -52,7 +61,7 @@ export default function XRayPanel({
                         onChange={(e) => onUpdateVoice?.(name, e.target.value)}
                         className="text-[10px] bg-white border border-emerald-200 rounded px-1 py-0.5 outline-none focus:ring-1 focus:ring-emerald-500"
                       >
-                        {voices.map(v => <option key={v} value={v}>{v}</option>)}
+                        {voices.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
                       </select>
                     </div>
                   ))}

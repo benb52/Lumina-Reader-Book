@@ -26,7 +26,7 @@ class RateLimiter {
   private queue: (() => Promise<void>)[] = [];
   private processing = false;
   private lastRequestTime = 0;
-  private minInterval = 3000; // 20 requests per minute
+  private minInterval = 4000; // 15 requests per minute (safer for free tier)
   private pausedUntil = 0;
 
   async schedule<T>(fn: () => Promise<T>): Promise<T> {
@@ -65,9 +65,9 @@ class RateLimiter {
                                    errorStr.includes('error code: 6');
           
           if (isRateLimit || isTransientError) {
-            // If we hit a rate limit or transient error, pause the entire limiter for 30 seconds
-            this.pausedUntil = Date.now() + 30000;
-            console.warn(`[RateLimiter] Quota or Transient error hit. Pausing all requests for 30s.`);
+            // If we hit a rate limit or transient error, pause the entire limiter for 60 seconds
+            this.pausedUntil = Date.now() + 60000;
+            console.warn(`[RateLimiter] Quota or Transient error hit. Pausing all requests for 60s.`);
           }
           reject(error);
         }
@@ -284,6 +284,8 @@ export const getDefinition = async (word: string, context: string, apiKey: strin
 };
 
 const repairJson = (jsonStr: string) => {
+  if (!jsonStr || typeof jsonStr !== 'string') return '{}';
+  
   let repaired = jsonStr.trim();
   
   // 1. Remove potential markdown blocks
@@ -344,6 +346,12 @@ const repairJson = (jsonStr: string) => {
     if (escaped) result = result.slice(0, -1);
     result += '"';
   }
+
+  // Remove trailing comma or colon before closing brackets
+  result = result.trim();
+  while (result.endsWith(',') || result.endsWith(':')) {
+    result = result.slice(0, -1).trim();
+  }
   
   while (stack.length > 0) {
     result += stack.pop();
@@ -391,6 +399,13 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
 
   const formattedPages = pages.map(p => `--- PAGE START: ${p.index} ---\n${p.text}\n--- PAGE END: ${p.index} ---`).join('\n\n');
 
+    const hebrewGuidance = language.toLowerCase() === 'hebrew' ? `
+          HEBREW SPECIFIC GUIDELINES:
+          - In Hebrew, names often have prefixes (ו, ה, ל, ב, מ, ש, כ). Identify the core name correctly.
+          - Identify speakers even if the text uses gendered verbs to imply the speaker.
+          - The output segments MUST preserve all Hebrew punctuation and vocalization (nikud) if present.
+          ` : '';
+
   const response = await withRetry(() => ai.models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: {
@@ -402,7 +417,7 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
           1. If it's the narrator, the speaker is "Narrator".
           2. If it's a character, use their full name as mentioned in the text.
           3. Be very precise about where a character starts and ends their speech.
-          4. For any NEW characters found (including "Narrator" if not in the list below), assign a voice from this list: ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr', 'Aoede'].
+          4. For any NEW characters found (including "Narrator" if not in the list below), assign a voice from this list: ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr', 'Aoede', 'Orpheus', 'Cassiopeia'].
           5. Match the voice to the character's gender, age, and personality:
              - 'Kore': Young/High-pitched female.
              - 'Charon': Deep/Mature male.
@@ -410,19 +425,25 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
              - 'Fenrir': Gruff/Strong male.
              - 'Zephyr': Soft/Calm female.
              - 'Aoede': Vibrant/Expressive female.
+             - 'Orpheus': Expressive/Theatrical male.
+             - 'Cassiopeia': Elegant/Sophisticated female.
           6. "Narrator" should usually be 'Zephyr' (calm female) or 'Charon' (mature male) unless context suggests otherwise.
-          7. Ensure the most dominant characters get unique voices if possible.
-          8. If multiple characters must share a voice, ensure they are not in the same scene together.
-          9. IMPORTANT: Group the segments by the page index provided in the markers.
-          10. Detect the gender of each character (male, female, or neutral).
-          11. DO NOT repeat the same text multiple times. Ensure the segments exactly reconstruct the original text.
-          12. Keep the JSON response as compact as possible.
+          7. Identify the "Main Characters" vs "Minor Characters".
+          8. Ensure the most dominant characters get UNIQUE voices if possible.
+          9. If there are more characters than available voices:
+             - Assign unique voices to "Main Characters".
+             - Reuse voices for "Minor Characters" if needed, ensuring they don't appear in the same scene together.
+          10. IMPORTANT: Group the segments by the page index provided in the markers.
+          11. Detect the gender of each character (male, female, or neutral).
+          12. DO NOT repeat the same text multiple times. Ensure the segments exactly reconstruct the original text.
+          13. Keep the JSON response as compact as possible.
           13. DO NOT include any text outside of the JSON structure.
           14. Each segment's text must be a verbatim excerpt from the original text.
           15. IMPORTANT: Combine consecutive segments spoken by the same character into a single segment to keep the JSON response small.
           16. The total number of segments per page should be kept to a minimum (ideally under 20).
           17. Ensure all double quotes inside the text are properly escaped as \\" in the JSON.
           18. Ensure there are no literal newlines inside the JSON strings; use \\n instead.
+          ${hebrewGuidance}
           
           Existing character voices to maintain consistency: ${JSON.stringify({ Narrator: 'Zephyr', ...existingSpeakerVoices })}
           
@@ -473,14 +494,15 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
   }));
 
   try {
-    const text = response.text || '{}';
-    return parseWithRepair(text);
+    const rawText = response.text || '{}';
+    return parseWithRepair(rawText);
   } catch (e) {
     console.error('Failed to parse batch speaker analysis', e);
-    console.log('Raw response length:', response.text?.length);
-    if (response.text) {
-      console.log('Raw response preview (first 500 chars):', response.text.substring(0, 500));
-      console.log('Raw response end (last 500 chars):', response.text.substring(Math.max(0, response.text.length - 500)));
+    const rawText = response.text || '';
+    console.log('Raw response length:', rawText.length);
+    if (rawText) {
+      console.log('Raw response preview (first 500 chars):', rawText.substring(0, 500));
+      console.log('Raw response end (last 500 chars):', rawText.substring(Math.max(0, rawText.length - 500)));
     }
     throw new Error('Failed to parse AI response. The text might be too large or complex for a single batch. Try reducing the batch size or simplifying the content.');
   }
@@ -492,6 +514,13 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
   const ai = new GoogleGenAI({ apiKey: finalApiKey.trim() });
   handlePostCall();
 
+  const hebrewGuidance = language.toLowerCase() === 'hebrew' ? `
+    HEBREW SPECIFIC GUIDELINES:
+    - In Hebrew, names often have prefixes (ו, ה, ל, ב, מ, ש, כ). Identify the core name correctly.
+    - Identify speakers even if the text uses gendered verbs to imply the speaker.
+    - The output segments MUST preserve all Hebrew punctuation and vocalization (nikud) if present.
+    ` : '';
+
   const response = await withRetry(() => ai.models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: `Analyze the following book text professionally. The book is written in ${language}. Break it down into segments and identify who is speaking each segment.
@@ -500,7 +529,7 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
     1. If it's the narrator, the speaker is "Narrator".
     2. If it's a character, use their full name as mentioned in the text.
     3. Be very precise about where a character starts and ends their speech.
-    4. For any NEW characters found (including "Narrator" if not in the list below), assign a voice from this list: ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr', 'Aoede'].
+    4. For any NEW characters found (including "Narrator" if not in the list below), assign a voice from this list: ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr', 'Aoede', 'Orpheus', 'Cassiopeia'].
     5. Match the voice to the character's gender, age, and personality:
        - 'Kore': Young/High-pitched female.
        - 'Charon': Deep/Mature male.
@@ -508,12 +537,18 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
        - 'Fenrir': Gruff/Strong male.
        - 'Zephyr': Soft/Calm female.
        - 'Aoede': Vibrant/Expressive female.
+       - 'Orpheus': Expressive/Theatrical male.
+       - 'Cassiopeia': Elegant/Sophisticated female.
     6. "Narrator" should usually be 'Zephyr' (calm female) or 'Charon' (mature male) unless context suggests otherwise.
-    7. Ensure the most dominant characters get unique voices if possible.
-    8. If multiple characters must share a voice, ensure they are not in the same scene together.
-    9. Detect the gender of each character (male, female, or neutral).
-    10. DO NOT repeat the same text multiple times. Ensure the segments exactly reconstruct the original text.
-    11. Keep the JSON response as compact as possible.
+    7. Identify the "Main Characters" vs "Minor Characters".
+    8. Ensure the most dominant characters get UNIQUE voices if possible.
+    9. If there are more characters than available voices:
+       - Assign unique voices to "Main Characters".
+       - Reuse voices for "Minor Characters" if needed, ensuring they don't appear in the same scene together.
+    10. Detect the gender of each character (male, female, or neutral).
+    11. DO NOT repeat the same text multiple times. Ensure the segments exactly reconstruct the original text.
+    12. Keep the JSON response as compact as possible.
+    ${hebrewGuidance}
     
     Existing character voices to maintain consistency: ${JSON.stringify({ Narrator: 'Zephyr', ...existingSpeakerVoices })}
     
@@ -553,8 +588,8 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
   }));
 
   try {
-    const text = response.text || '{}';
-    return parseWithRepair(text);
+    const rawText = response.text || '{}';
+    return parseWithRepair(rawText);
   } catch (e) {
     console.error('Failed to parse speaker analysis', e);
     return null;

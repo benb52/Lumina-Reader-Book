@@ -37,7 +37,7 @@ export default function App() {
           uid: user.uid, 
           email: user.email || '', 
           name: userMeta?.name || user.email?.split('@')[0] || 'User',
-          isAdmin: userMeta?.isAdmin || user.email === 'shakedbenb@gmail.com',
+          isAdmin: userMeta?.isAdmin || user.email?.toLowerCase() === 'shakedbenb@gmail.com',
           isApiKeyManaged: userMeta?.isApiKeyManaged || false,
           managedApiKey: userMeta?.managedApiKey || '',
           apiKeyLimit: userMeta?.apiKeyLimit || 0,

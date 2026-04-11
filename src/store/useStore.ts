@@ -25,6 +25,19 @@ export interface Book {
   language?: string;
   textDirection?: 'ltr' | 'rtl';
   coverUrl?: string;
+  keriKetivEnabled?: boolean;
+  isDramatizedReadingEnabled?: boolean;
+  ttsProvider?: 'browser' | 'gemini';
+  aiChunkSizeMultiplier?: number;
+  geminiVoice?: 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' | 'Aoede' | 'Orpheus' | 'Cassiopeia';
+  subtitles?: {
+    [language: string]: {
+      pages: {
+        [pageIndex: number]: string[];
+      };
+      lastUpdated: number;
+    };
+  };
   analysis?: {
     summary: string;
     characters: any[];
@@ -74,7 +87,7 @@ export interface AppSettings {
   apiKey: string;
   highlightStyle: 'yellow-bg' | 'underline' | 'bold' | 'text-blue' | 'character-based';
   ttsProvider: 'browser' | 'gemini';
-  geminiVoice: 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' | 'Aoede';
+  geminiVoice: 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' | 'Aoede' | 'Orpheus' | 'Cassiopeia';
   subtitleLanguage: string;
   autoTurnPage: boolean;
   isSubtitleTranslationEnabled: boolean;
@@ -82,7 +95,6 @@ export interface AppSettings {
   highlightSavedQuotes: boolean;
   aiChunkSizeMultiplier: number;
   aiLanguage: 'he' | 'en' | 'es';
-  isDramatizedReadingEnabled: boolean;
 }
 
 interface AppState {
@@ -99,6 +111,8 @@ interface AppState {
   incrementApiCallCount: () => void;
   isWaitingForQuota: boolean;
   setIsWaitingForQuota: (val: boolean) => void;
+  isFirestoreOffline: boolean;
+  setIsFirestoreOffline: (val: boolean) => void;
   vocabulary: VocabularyWord[];
   setVocabulary: (words: VocabularyWord[]) => void;
   addVocabularyWord: (word: VocabularyWord) => void;
@@ -131,7 +145,6 @@ export const useStore = create<AppState>()(
         highlightSavedQuotes: true,
         aiChunkSizeMultiplier: 1,
         aiLanguage: 'he',
-        isDramatizedReadingEnabled: false,
       },
       login: (user) => set({ user }),
       logout: () => set({ user: null }),
@@ -148,6 +161,8 @@ export const useStore = create<AppState>()(
       incrementApiCallCount: () => set((state) => ({ apiCallCount: state.apiCallCount + 1 })),
       isWaitingForQuota: false,
       setIsWaitingForQuota: (val) => set({ isWaitingForQuota: val }),
+      isFirestoreOffline: false,
+      setIsFirestoreOffline: (val) => set({ isFirestoreOffline: val }),
       vocabulary: [],
       setVocabulary: (words) => set({ vocabulary: words }),
       addVocabularyWord: (word) => set((state) => ({ vocabulary: [word, ...state.vocabulary] })),

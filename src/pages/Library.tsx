@@ -509,7 +509,7 @@ export default function Library() {
                 <div className="absolute top-2 right-2 bg-emerald-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded shadow-sm z-20 flex items-center gap-1">
                   <Captions size={10} />
                   {book.dramatization.pages && book.totalPages > 0 ? (
-                    <span>{Math.round((Object.keys(book.dramatization.pages).length / book.totalPages) * 100)}%</span>
+                    <span>{Math.round((Object.keys(book.dramatization.pages).length / book.totalPages) * 100) === 100 ? <Check size={10} /> : `${Math.round((Object.keys(book.dramatization.pages).length / book.totalPages) * 100)}%`}</span>
                   ) : (
                     <span>AI</span>
                   )}

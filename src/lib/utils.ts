@@ -9,3 +9,8 @@ export function getCleanText(text: string) {
   if (!text) return '';
   return text.replace(/(<<BOLD_START>>|<<BOLD_END>>|<<UNDERLINE_START>>|<<UNDERLINE_END>>|<<QUOTE_START>>|<<QUOTE_END>>|<<PAGE:\d+>>)/g, '');
 }
+
+export const getSentences = (text: string) => {
+  if (!text) return [];
+  return text.split(/(?<=[.!?\n])\s+/).filter(s => s.trim().length > 0);
+};

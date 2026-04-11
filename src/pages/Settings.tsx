@@ -18,7 +18,27 @@ export default function Settings() {
   const [localName, setLocalName] = useState(user?.name || '');
   const [isSaved, setIsSaved] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   
+  useEffect(() => {
+    const loadVoices = () => {
+      const availableVoices = window.speechSynthesis.getVoices();
+      setVoices(availableVoices);
+    };
+    loadVoices();
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+    return () => {
+      window.speechSynthesis.onvoiceschanged = null;
+    };
+  }, []);
+
+  const filteredVoices = voices.filter(v => {
+    if (localSettings.aiLanguage === 'he') return v.lang.startsWith('he');
+    if (localSettings.aiLanguage === 'en') return v.lang.startsWith('en');
+    if (localSettings.aiLanguage === 'es') return v.lang.startsWith('es');
+    return true;
+  });
+
   const [newPassword, setNewPassword] = useState('');
   const [passwordMessage, setPasswordMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -263,7 +283,7 @@ export default function Settings() {
 
               <div>
                 <label className="block text-sm font-medium text-zinc-700 mb-1">
-                  AI Context Size (Save API Calls)
+                  AI Context Size (Global Default)
                 </label>
                 <select
                   value={localSettings.aiChunkSizeMultiplier || 1}
@@ -275,7 +295,7 @@ export default function Settings() {
                   <option value="3">3x (Max context - Saves calls)</option>
                 </select>
                 <p className="text-xs text-zinc-500 mt-1">
-                  Send more text to Gemini at once to reduce the number of API calls.
+                  Send more text to Gemini at once. Can be overridden per book in Edit Book.
                 </p>
               </div>
             </div>
@@ -334,15 +354,13 @@ export default function Settings() {
                 <option value="underline">Underline</option>
                 <option value="bold">Bold Text</option>
                 <option value="text-blue">Blue Text</option>
-                {localSettings.isDramatizedReadingEnabled && (
-                  <option value="character-based">Character-Based (Gender Colors)</option>
-                )}
+                <option value="character-based">Character-based Gender Colors</option>
               </select>
             </div>
 
             <div>
               <label className="block text-sm font-medium text-zinc-700 mb-1">
-                TTS Provider
+                TTS Provider (Global Default)
               </label>
               <select
                 value={localSettings.ttsProvider || 'browser'}
@@ -352,27 +370,54 @@ export default function Settings() {
                 <option value="browser">Browser Native</option>
                 <option value="gemini">Gemini API (High Quality)</option>
               </select>
+              <p className="text-xs text-zinc-500 mt-1">
+                Default reading mode. Can be overridden per book in Edit Book.
+              </p>
               {localSettings.ttsProvider === 'gemini' && !localSettings.apiKey && (
                 <p className="text-xs text-red-500 mt-1">Requires Gemini API Key above.</p>
               )}
             </div>
 
-            {localSettings.ttsProvider === 'gemini' && !localSettings.isDramatizedReadingEnabled && (
+            {localSettings.ttsProvider === 'gemini' && (
               <div>
                 <label className="block text-sm font-medium text-zinc-700 mb-1">
-                  Gemini Voice
+                  Character Voice
                 </label>
                 <select
                   value={localSettings.geminiVoice || 'Kore'}
                   onChange={(e) => setLocalSettings({ ...localSettings, geminiVoice: e.target.value as any })}
-                  className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white"
+                  className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white disabled:bg-zinc-50 disabled:cursor-not-allowed"
                 >
-                  <option value="Puck">Puck</option>
-                  <option value="Charon">Charon</option>
-                  <option value="Kore">Kore</option>
-                  <option value="Fenrir">Fenrir</option>
-                  <option value="Zephyr">Zephyr</option>
+                  <option value="Puck">Puck (Male)</option>
+                  <option value="Charon">Charon (Male)</option>
+                  <option value="Kore">Kore (Female)</option>
+                  <option value="Fenrir">Fenrir (Male)</option>
+                  <option value="Zephyr">Zephyr (Female)</option>
+                  <option value="Aoede">Aoede (Female)</option>
+                  <option value="Orpheus">Orpheus (Male)</option>
+                  <option value="Cassiopeia">Cassiopeia (Female)</option>
                 </select>
+              </div>
+            )}
+
+            {localSettings.ttsProvider === 'browser' && (
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 mb-1">
+                  Browser Voice
+                </label>
+                <select
+                  value={localSettings.ttsVoice || ''}
+                  onChange={(e) => setLocalSettings({ ...localSettings, ttsVoice: e.target.value })}
+                  className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white disabled:bg-zinc-50 disabled:cursor-not-allowed"
+                >
+                  <option value="">Default System Voice</option>
+                  {filteredVoices.map(v => (
+                    <option key={v.name} value={v.name}>{v.name} ({v.lang})</option>
+                  ))}
+                </select>
+                {filteredVoices.length === 0 && (
+                  <p className="text-xs text-amber-600 mt-1">No {localSettings.aiLanguage === 'he' ? 'Hebrew' : localSettings.aiLanguage === 'es' ? 'Spanish' : 'English'} voices found on your system.</p>
+                )}
               </div>
             )}
 
@@ -464,26 +509,6 @@ export default function Settings() {
                   className="sr-only peer" 
                   checked={!!localSettings.highlightSavedQuotes}
                   onChange={(e) => setLocalSettings({ ...localSettings, highlightSavedQuotes: e.target.checked })}
-                />
-                <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
-              </label>
-            </div>
-
-            <div className="flex items-center justify-between p-4 border border-zinc-200 rounded-xl bg-zinc-50/50">
-              <div>
-                <label className="block text-sm font-medium text-zinc-900">
-                  Dramatized Reading (AI)
-                </label>
-                <p className="text-xs text-zinc-500 mt-0.5">
-                  Use different voices for different characters (Requires AI analysis per page).
-                </p>
-              </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input 
-                  type="checkbox" 
-                  className="sr-only peer" 
-                  checked={!!localSettings.isDramatizedReadingEnabled}
-                  onChange={(e) => setLocalSettings({ ...localSettings, isDramatizedReadingEnabled: e.target.checked })}
                 />
                 <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
               </label>

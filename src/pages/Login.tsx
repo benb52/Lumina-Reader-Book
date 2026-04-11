@@ -44,7 +44,7 @@ export default function Login() {
           uid: user.uid, 
           email: user.email || '', 
           name: user.email?.split('@')[0] || 'User',
-          isAdmin: user.email === 'shakedbenb@gmail.com'
+          isAdmin: user.email?.toLowerCase() === 'shakedbenb@gmail.com'
         });
         navigate('/');
       }, 1500);
@@ -80,7 +80,7 @@ export default function Login() {
           uid: user.uid, 
           email: user.email || '', 
           name: user.displayName || user.email?.split('@')[0] || 'User',
-          isAdmin: user.email === 'shakedbenb@gmail.com'
+          isAdmin: user.email?.toLowerCase() === 'shakedbenb@gmail.com'
         });
         navigate('/');
       }, 1500);
