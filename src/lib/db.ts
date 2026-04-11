@@ -172,7 +172,7 @@ export const db = {
     let sharedBookData: any = {
       id: shareId,
       senderId: senderId,
-      senderEmail: senderEmail,
+      senderEmail: senderEmail.toLowerCase(),
       senderName: auth.currentUser?.displayName || senderEmail.split('@')[0],
       targetEmail: targetEmail.toLowerCase(),
       sentAt: Date.now(),
@@ -219,10 +219,9 @@ export const db = {
       });
       return receivedBooks.sort((a, b) => b.sentAt - a.sentAt);
     } catch (error: any) {
-      if (error.code !== 'permission-denied' && error.code !== 'unavailable') {
-        console.error("Error getting received books:", error);
-      }
-      throw error;
+      console.error("Error fetching received books:", error);
+      handleFirestoreError(error, OperationType.LIST, 'shared_books');
+      return [];
     }
   },
 

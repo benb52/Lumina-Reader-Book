@@ -109,9 +109,8 @@ export default function Library() {
       const rBooks = await db.getReceivedBooks();
       setReceivedBooks(rBooks);
     } catch (error: any) {
-      if (error.code === 'permission-denied' || error.message?.includes('permission')) {
-        setErrorMessage("Firebase permissions error: Please update your Firestore Security Rules to enable book sharing.");
-      }
+      console.error("Library loadReceivedBooks error:", error);
+      setErrorMessage(`Failed to load shared books: ${error.message || 'Unknown error'}`);
     }
   };
 
@@ -406,9 +405,16 @@ export default function Library() {
       )}
 
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6 md:mb-8">
-        <div>
+        <div className="flex flex-col">
           <h1 className="text-2xl md:text-3xl font-semibold tracking-tight text-zinc-900">My Library</h1>
-          <p className="text-sm md:text-base text-zinc-500 mt-1">Your personal collection of books and documents.</p>
+          <div className="flex items-center gap-2 mt-1">
+            <p className="text-sm md:text-base text-zinc-500">Your personal collection of books and documents.</p>
+            {user?.email && (
+              <span className="text-[10px] bg-zinc-100 text-zinc-500 px-2 py-0.5 rounded-full font-mono">
+                {user.email}
+              </span>
+            )}
+          </div>
         </div>
         
         <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">

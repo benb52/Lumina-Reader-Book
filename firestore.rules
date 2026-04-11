@@ -109,7 +109,7 @@ service cloud.firestore {
       return isAuthenticated() &&
         ((exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isAdmin', false) == true) ||
-          (request.auth.token.email.lower() == "shakedbenb@gmail.com" && request.auth.token.email_verified == true));
+          (request.auth.token.get('email', '').lower() == "shakedbenb@gmail.com" && request.auth.token.get('email_verified', false) == true));
     }
     
     function isValidEmail(email) {
@@ -199,12 +199,14 @@ service cloud.firestore {
     match /shared_books/{shareId} {
       allow create: if isAuthenticated() && 
         request.resource.data.senderId == request.auth.uid &&
-        request.resource.data.senderEmail == request.auth.token.email &&
+        request.resource.data.senderEmail.lower() == request.auth.token.email.lower() &&
         isValidEmail(request.resource.data.targetEmail) &&
         isValidString('senderName', 100);
         
       allow read, delete: if isAuthenticated() && 
-        (resource.data.targetEmail == request.auth.token.email.lower() || resource.data.senderId == request.auth.uid || isAdmin());
+        (resource.data.targetEmail == request.auth.token.email.lower() || 
+         resource.data.senderId == request.auth.uid || 
+         isAdmin());
         
       // Only allow status updates (e.g. 'accepted')
       allow update: if isAuthenticated() && 
