@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useStore } from '../store/useStore';
 import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -20,6 +20,18 @@ export default function QuotaWarning() {
       console.log("Firestore still offline");
     }
   };
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (isFirestoreOffline && user) {
+      interval = setInterval(() => {
+        handleRetryFirestore();
+      }, 30000); // Retry every 30s
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isFirestoreOffline, user]);
 
   return (
     <AnimatePresence>

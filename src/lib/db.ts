@@ -267,11 +267,39 @@ export const db = {
     // Save to Firebase (Everything in Firestore now)
     try {
       await setDoc(doc(firestore, `users/${userId}/books`, book.id), book);
+      appStore.getState().setIsFirestoreOffline(false);
     } catch (error: any) {
       if (error.code === 'permission-denied' || error.code === 'unavailable') {
         console.warn("Firebase permission denied or offline. Data saved locally only.");
+        if (error.code === 'unavailable') appStore.getState().setIsFirestoreOffline(true);
       } else {
         console.error("Error saving to Firebase:", error);
+      }
+    }
+  },
+
+  async updateBookField(bookId: string, field: string, value: any) {
+    const userId = auth.currentUser?.uid;
+    if (!userId) return;
+
+    // Update locally first
+    const book = await this.getBook(bookId);
+    if (book) {
+      const updatedBook = { ...book, [field]: value };
+      await set(`book-${userId}-${bookId}`, updatedBook);
+    }
+
+    // Update Firebase
+    try {
+      const bookRef = doc(firestore, `users/${userId}/books`, bookId);
+      await setDoc(bookRef, { [field]: value }, { merge: true });
+      appStore.getState().setIsFirestoreOffline(false);
+    } catch (error: any) {
+      if (error.code === 'permission-denied' || error.code === 'unavailable') {
+        console.warn(`Firebase permission denied or offline. Field ${field} updated locally only.`);
+        if (error.code === 'unavailable') appStore.getState().setIsFirestoreOffline(true);
+      } else {
+        console.error(`Error updating book field ${field}:`, error);
       }
     }
   },

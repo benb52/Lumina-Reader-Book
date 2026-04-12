@@ -4,8 +4,8 @@ import { Save, X, ChevronLeft, ChevronRight, Trash, Plus, Bold, Underline, Spark
 import { useStore, Book } from '../store/useStore';
 import { db } from '../lib/db';
 import { Button } from '../components/ui/Button';
-import { analyzeSpeakers, analyzeSpeakersBatch, generateSpeech, translateSentencesBatch } from '../services/ai';
-import { cn, getCleanText, getSentences } from '../lib/utils';
+import { analyzeSpeakers, analyzeSpeakersBatch, generateSpeech, translateSentencesBatch, translateWordsBatch } from '../services/ai';
+import { cn, getCleanText, getSentences, getUniqueWords } from '../lib/utils';
 
 const getAvailableVoices = (isHebrew: boolean) => [
   { id: 'Kore', name: 'Kore', description: isHebrew ? 'אישה צעירה' : 'Young Female' },
@@ -45,6 +45,10 @@ export default function BookOrchestrator() {
   const [targetSubtitleLanguage, setTargetSubtitleLanguage] = useState<string>('Hebrew');
   const [isGeneratingSubtitles, setIsGeneratingSubtitles] = useState(false);
   const [subtitleProgress, setSubtitleProgress] = useState(0);
+  const [cancelSubtitles, setCancelSubtitles] = useState(false);
+  const [isGeneratingDictionary, setIsGeneratingDictionary] = useState(false);
+  const [dictionaryProgress, setDictionaryProgress] = useState(0);
+  const [cancelDictionary, setCancelDictionary] = useState(false);
   const [availableBrowserVoices, setAvailableBrowserVoices] = useState<SpeechSynthesisVoice[]>([]);
 
   useEffect(() => {
@@ -173,43 +177,65 @@ export default function BookOrchestrator() {
     setPageToDelete(false);
   };
 
-  const handleGenerateSubtitles = async () => {
+  const handleGenerateSubtitles = async (startFresh: boolean = false) => {
     if (!book || !apiKey || pages.length === 0) {
       if (!apiKey) setErrorMessage('API Key is required for translation.');
       return;
     }
 
     setIsGeneratingSubtitles(true);
-    setSubtitleProgress(0);
+    setCancelSubtitles(false);
+    cancelRef.current = false;
     
-    let currentSubtitles = { ...(book.subtitles?.[targetSubtitleLanguage]?.pages || {}) };
+    let currentSubtitles = startFresh ? {} : { ...(book.subtitles?.[targetSubtitleLanguage]?.pages || {}) };
+    let currentWordMap = startFresh ? {} : { ...(book.subtitles?.[targetSubtitleLanguage]?.wordTranslations || {}) };
     let latestBook = book;
+    
+    const existingSubProgress = !startFresh && book.subtitles?.[targetSubtitleLanguage]?.pages
+      ? Math.round((Object.keys(book.subtitles[targetSubtitleLanguage].pages).length / pages.length) * 100)
+      : 0;
+    
+    setSubtitleProgress(existingSubProgress);
 
     try {
       for (let i = 0; i < pages.length; i++) {
         if (cancelRef.current) break;
 
+        // Skip if already translated and not starting fresh
+        if (!startFresh && currentSubtitles[i]) {
+          setSubtitleProgress(Math.round(((i + 1) / pages.length) * 100));
+          continue;
+        }
+
         const cleanText = getCleanText(pages[i]);
         if (!cleanText.trim()) {
-          currentSubtitles[i] = '';
+          currentSubtitles[i] = [];
           setSubtitleProgress(Math.round(((i + 1) / pages.length) * 100));
           continue;
         }
 
         // Split into sentences for better translation quality
         const sentences = getSentences(cleanText);
-        const translatedSentences = await translateSentencesBatch(sentences, targetSubtitleLanguage, apiKey);
+        const { translations, wordMap } = await translateSentencesBatch(sentences, targetSubtitleLanguage, apiKey);
         
-        if (translatedSentences && translatedSentences.length > 0) {
-          currentSubtitles[i] = translatedSentences;
+        if (translations && translations.length > 0) {
+          currentSubtitles[i] = translations;
         }
 
-        // Save incrementally every 5 pages
+        if (wordMap) {
+          // Normalize keys to lowercase
+          Object.entries(wordMap).forEach(([word, trans]) => {
+            currentWordMap[word.toLowerCase()] = trans as string;
+          });
+        }
+
+        // Save incrementally every 5 pages to be safer and more efficient
         if ((i + 1) % 5 === 0 || i === pages.length - 1) {
           const updatedSubtitles = {
             ...(latestBook.subtitles || {}),
             [targetSubtitleLanguage]: {
               pages: currentSubtitles,
+              wordTranslations: currentWordMap,
               lastUpdated: Date.now()
             }
           };
@@ -217,16 +243,127 @@ export default function BookOrchestrator() {
           latestBook = updatedBook;
           setBook(updatedBook);
           updateBook(book.id, { subtitles: updatedSubtitles });
-          await db.saveBook(updatedBook);
+          await db.updateBookField(book.id, 'subtitles', updatedSubtitles);
         }
 
         setSubtitleProgress(Math.round(((i + 1) / pages.length) * 100));
+        
+        // Small delay to be kind to the API
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     } catch (err) {
       console.error("Subtitle generation failed", err);
       setErrorMessage("Failed to generate subtitles. Progress has been saved.");
     } finally {
+      if (latestBook && (cancelRef.current)) {
+        setBook(latestBook);
+        await db.saveBook(latestBook);
+        updateBook(book.id, { subtitles: latestBook.subtitles });
+      }
       setIsGeneratingSubtitles(false);
+      setCancelSubtitles(false);
+    }
+  };
+
+  const handleGenerateDictionary = async () => {
+    if (!book || !apiKey || pages.length === 0) {
+      if (!apiKey) setErrorMessage('API Key is required for translation.');
+      return;
+    }
+
+    setIsGeneratingDictionary(true);
+    setDictionaryProgress(0);
+    setCancelDictionary(false);
+    cancelRef.current = false;
+    
+    try {
+      // 1. Extract all unique words from the book
+      console.log(`[Dictionary] Extracting unique words from ${pages.length} pages...`);
+      const startTime = Date.now();
+      const fullText = pages.join(' ');
+      const uniqueWords = getUniqueWords(fullText);
+      const extractionTime = Date.now() - startTime;
+      console.log(`[Dictionary] Found ${uniqueWords.length} unique words in ${extractionTime}ms.`);
+      
+      if (uniqueWords.length === 0) {
+        setIsGeneratingDictionary(false);
+        return;
+      }
+
+      // 2. Batch translate words (e.g., 100 words per batch)
+      const batchSize = 100;
+      const totalWords = uniqueWords.length;
+      let currentWordMap = { ...(book.subtitles?.[targetSubtitleLanguage]?.wordTranslations || {}) };
+      let latestBook = book;
+      let wordsSinceLastSave = 0;
+
+      console.log(`[Dictionary] Starting translation batches. Current dictionary size: ${Object.keys(currentWordMap).length}`);
+
+      for (let i = 0; i < uniqueWords.length; i += batchSize) {
+        if (cancelRef.current) {
+          console.log(`[Dictionary] Generation cancelled by user.`);
+          break;
+        }
+
+        const batch = uniqueWords.slice(i, i + batchSize);
+        // Skip words already in dictionary
+        const wordsToTranslate = batch.filter(w => !currentWordMap[w.toLowerCase()]);
+        
+        if (wordsToTranslate.length > 0) {
+          console.log(`[Dictionary] Translating batch ${Math.floor(i/batchSize) + 1}. Words to translate: ${wordsToTranslate.length}`);
+          const translatedBatch = await translateWordsBatch(wordsToTranslate, targetSubtitleLanguage, apiKey);
+          
+          if (translatedBatch) {
+            const newWordsCount = Object.keys(translatedBatch).length;
+            console.log(`[Dictionary] Received ${newWordsCount} translations.`);
+            Object.entries(translatedBatch).forEach(([word, trans]) => {
+              currentWordMap[word.toLowerCase()] = trans as string;
+            });
+            wordsSinceLastSave += wordsToTranslate.length;
+          } else {
+            console.warn(`[Dictionary] Batch ${Math.floor(i/batchSize) + 1} returned no results.`);
+          }
+        } else {
+          console.log(`[Dictionary] Skipping batch ${Math.floor(i/batchSize) + 1} (all words already translated).`);
+        }
+
+        const progress = Math.round(((i + batchSize) / totalWords) * 100);
+        setDictionaryProgress(Math.min(100, progress));
+
+        // Save incrementally every 1000 new words or at the end
+        if (wordsSinceLastSave >= 1000 || i + batchSize >= totalWords) {
+          console.log(`[Dictionary] Saving progress to database... (${Object.keys(currentWordMap).length} words total)`);
+          const updatedSubtitles = {
+            ...(latestBook.subtitles || {}),
+            [targetSubtitleLanguage]: {
+              ...(latestBook.subtitles?.[targetSubtitleLanguage] || { pages: {}, lastUpdated: Date.now() }),
+              wordTranslations: currentWordMap,
+              lastUpdated: Date.now()
+            }
+          };
+          const updatedBook = { ...latestBook, subtitles: updatedSubtitles };
+          latestBook = updatedBook;
+          setBook(updatedBook);
+          updateBook(book.id, { subtitles: updatedSubtitles });
+          await db.updateBookField(book.id, 'subtitles', updatedSubtitles);
+          wordsSinceLastSave = 0;
+        }
+
+        // Small delay to be nice to the API
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+
+    } catch (err: any) {
+      console.error("Dictionary generation failed", err);
+      const errorStr = (err?.message || JSON.stringify(err)).toLowerCase();
+      if (errorStr.includes('429') || errorStr.includes('resource_exhausted') || errorStr.includes('quota') || errorStr.includes('limit')) {
+        setErrorMessage("Gemini API quota exceeded. Progress has been saved. You can resume later.");
+      } else {
+        setErrorMessage("Failed to generate word dictionary. Progress has been saved.");
+      }
+    } finally {
+      setIsGeneratingDictionary(false);
+      setCancelDictionary(false);
     }
   };
 
@@ -871,37 +1008,56 @@ export default function BookOrchestrator() {
                 <option value="Chinese">Chinese</option>
               </select>
             </div>
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-zinc-700 invisible">Action</label>
+            <div className="flex flex-wrap gap-2 pt-5">
               <Button 
-                onClick={handleGenerateSubtitles} 
-                disabled={isGeneratingSubtitles || isSaving}
+                onClick={() => handleGenerateSubtitles(false)} 
+                disabled={isGeneratingSubtitles || isGeneratingDictionary || isSaving}
                 className="bg-blue-600 hover:bg-blue-700 text-white border-transparent"
               >
                 {isGeneratingSubtitles ? (
-                  <><Loader2 size={16} className="mr-2 animate-spin" /> Generating ({subtitleProgress}%)</>
+                  <><Loader2 size={16} className="mr-2 animate-spin" /> Subtitles ({subtitleProgress}%)</>
                 ) : (
-                  <><Sparkles size={16} className="mr-2" /> Generate Stored Subtitles</>
+                  <><Sparkles size={16} className="mr-2" /> {book.subtitles?.[targetSubtitleLanguage]?.pages && Object.keys(book.subtitles[targetSubtitleLanguage].pages).length > 0 ? 'Continue Subtitles' : 'Generate Subtitles'}</>
+                )}
+              </Button>
+              <Button 
+                onClick={handleGenerateDictionary} 
+                disabled={isGeneratingSubtitles || isGeneratingDictionary || isSaving}
+                variant="outline"
+                className="border-blue-200 text-blue-700 hover:bg-blue-50"
+              >
+                {isGeneratingDictionary ? (
+                  <><Loader2 size={16} className="mr-2 animate-spin" /> Dictionary ({dictionaryProgress}%)</>
+                ) : (
+                  <><Sparkles size={16} className="mr-2" /> {book.subtitles?.[targetSubtitleLanguage]?.wordTranslations ? 'Update Dictionary' : 'Generate Dictionary'}</>
                 )}
               </Button>
             </div>
           </div>
           {book.subtitles?.[targetSubtitleLanguage] && (
-            <div className="mt-3 p-3 bg-blue-50 rounded-xl border border-blue-100 flex items-center justify-between">
-              <div className="flex items-center gap-2 text-blue-700">
-                <Check size={14} className="text-emerald-500" />
-                <span className="text-xs font-medium">
-                  Subtitles for {targetSubtitleLanguage} are ready ({Object.keys(book.subtitles[targetSubtitleLanguage].pages).length} pages)
-                </span>
+            <div className="mt-3 p-3 bg-blue-50 rounded-xl border border-blue-100 flex flex-col gap-2">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-blue-700">
+                  <Check size={14} className="text-emerald-500" />
+                  <span className="text-xs font-medium">
+                    Subtitles: {Object.keys(book.subtitles[targetSubtitleLanguage].pages || {}).length} pages ready
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-blue-700">
+                  <Check size={14} className="text-emerald-500" />
+                  <span className="text-xs font-medium">
+                    Dictionary: {Object.keys(book.subtitles[targetSubtitleLanguage].wordTranslations || {}).length} words ready
+                  </span>
+                </div>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center justify-between border-t border-blue-100 pt-2">
                 <Button 
                   variant="ghost" 
                   size="sm" 
                   onClick={() => handleDeleteSubtitles(targetSubtitleLanguage)}
                   className="h-7 px-2 text-[10px] text-red-600 hover:text-red-700 hover:bg-red-50"
                 >
-                  Delete
+                  Delete All Data
                 </Button>
                 <span className="text-[10px] text-blue-400">
                   Last updated: {new Date(book.subtitles[targetSubtitleLanguage].lastUpdated).toLocaleDateString()}
@@ -996,6 +1152,94 @@ export default function BookOrchestrator() {
                   className="w-full py-6 rounded-2xl border-zinc-200 text-zinc-600 hover:bg-zinc-50"
                 >
                   {cancelDramatization ? 'Cancelling...' : 'Cancel Analysis'}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {isGeneratingSubtitles && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+              <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full text-center">
+                <div className="bg-blue-100 text-blue-600 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6 animate-bounce">
+                  <Captions size={32} />
+                </div>
+                <h3 className="text-2xl font-bold text-zinc-900 mb-2">Generating Subtitles</h3>
+                <p className="text-zinc-500 mb-8">
+                  {isWaitingForQuota ? (
+                    <span className="text-amber-600 font-medium flex items-center justify-center gap-2">
+                      <Loader2 size={16} className="animate-spin" />
+                      Gemini API quota reached. Waiting to resume...
+                    </span>
+                  ) : (
+                    `AI is translating the book to ${targetSubtitleLanguage}. This will allow you to read with translations without waiting for API calls.`
+                  )}
+                </p>
+                
+                <div className="w-full bg-zinc-100 h-3 rounded-full overflow-hidden mb-4">
+                  <div 
+                    className="bg-blue-600 h-full transition-all duration-500 ease-out"
+                    style={{ width: `${subtitleProgress}%` }}
+                  />
+                </div>
+                <div className="flex justify-between text-sm font-medium text-zinc-600 mb-8">
+                  <span>Progress</span>
+                  <span>{subtitleProgress === 100 ? <Check size={18} className="text-emerald-500" /> : `${subtitleProgress}%`}</span>
+                </div>
+
+                <Button 
+                  variant="outline" 
+                  onClick={() => {
+                    cancelRef.current = true;
+                    setCancelSubtitles(true);
+                  }}
+                  disabled={cancelSubtitles}
+                  className="w-full py-6 rounded-2xl border-zinc-200 text-zinc-600 hover:bg-zinc-50"
+                >
+                  {cancelSubtitles ? 'Cancelling...' : 'Cancel Generation'}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {isGeneratingDictionary && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+              <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full text-center">
+                <div className="bg-emerald-100 text-emerald-600 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6 animate-bounce">
+                  <Sparkles size={32} />
+                </div>
+                <h3 className="text-2xl font-bold text-zinc-900 mb-2">Generating Dictionary</h3>
+                <p className="text-zinc-500 mb-8">
+                  {isWaitingForQuota ? (
+                    <span className="text-amber-600 font-medium flex items-center justify-center gap-2">
+                      <Loader2 size={16} className="animate-spin" />
+                      Gemini API quota reached. Waiting to resume...
+                    </span>
+                  ) : (
+                    `AI is creating a full word dictionary for the book in ${targetSubtitleLanguage}. This makes tap-to-translate instant.`
+                  )}
+                </p>
+                
+                <div className="w-full bg-zinc-100 h-3 rounded-full overflow-hidden mb-4">
+                  <div 
+                    className="bg-emerald-600 h-full transition-all duration-500 ease-out"
+                    style={{ width: `${dictionaryProgress}%` }}
+                  />
+                </div>
+                <div className="flex justify-between text-sm font-medium text-zinc-600 mb-8">
+                  <span>Progress</span>
+                  <span>{dictionaryProgress === 100 ? <Check size={18} className="text-emerald-500" /> : `${dictionaryProgress}%`}</span>
+                </div>
+
+                <Button 
+                  variant="outline" 
+                  onClick={() => {
+                    cancelRef.current = true;
+                    setCancelDictionary(true);
+                  }}
+                  disabled={cancelDictionary}
+                  className="w-full py-6 rounded-2xl border-zinc-200 text-zinc-600 hover:bg-zinc-50"
+                >
+                  {cancelDictionary ? 'Cancelling...' : 'Cancel Generation'}
                 </Button>
               </div>
             </div>

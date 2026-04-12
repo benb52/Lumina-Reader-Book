@@ -719,9 +719,28 @@ export default function BookReader() {
     setIsTranslatingSubtitle(true);
     setBatchTranslationStatus('loading');
     translateSentencesBatch(sentences, settings.subtitleLanguage, apiKey)
-      .then(translated => {
-        setPageTranslations(translated);
-        setBatchTranslationStatus(translated.length === sentences.length ? 'success' : 'error');
+      .then(({ translations, wordMap }) => {
+        setPageTranslations(translations);
+        setBatchTranslationStatus(translations.length === sentences.length ? 'success' : 'error');
+        
+        // Cache words if we got them
+        if (wordMap && book) {
+          const targetLang = settings.subtitleLanguage;
+          const updatedSubtitles = { ...(book.subtitles || {}) };
+          if (!updatedSubtitles[targetLang]) {
+            updatedSubtitles[targetLang] = { pages: {}, lastUpdated: Date.now(), wordTranslations: {} };
+          }
+          if (!updatedSubtitles[targetLang].wordTranslations) {
+            updatedSubtitles[targetLang].wordTranslations = {};
+          }
+          
+          Object.entries(wordMap).forEach(([word, trans]) => {
+            updatedSubtitles[targetLang].wordTranslations![word.toLowerCase()] = trans as string;
+          });
+          
+          updateBook(book.id, { subtitles: updatedSubtitles });
+          db.saveBook({ ...book, subtitles: updatedSubtitles });
+        }
       })
       .catch(err => {
         console.error("Batch translation error", err);
@@ -1234,6 +1253,25 @@ export default function BookReader() {
     if (!cleanWord) return;
 
     setSelectedText(cleanWord);
+    
+    // 1. Check Glossary first (from AI Analysis)
+    const glossaryEntry = book?.analysis?.glossary?.find(
+      (g: any) => g.term.toLowerCase() === cleanWord.toLowerCase()
+    );
+    if (glossaryEntry) {
+      setAiResult({ type: 'trans', content: glossaryEntry.definition });
+      return;
+    }
+
+    // 2. Check Stored Word Translations (Cache)
+    const targetLang = settings.subtitleLanguage;
+    const storedTranslation = book?.subtitles?.[targetLang]?.wordTranslations?.[cleanWord.toLowerCase()];
+    if (storedTranslation) {
+      setAiResult({ type: 'trans', content: storedTranslation });
+      return;
+    }
+
+    // 3. Not in cache, need to translate
     setIsAiLoading(true);
     setAiResult({ type: 'trans', content: '' });
 
@@ -1247,18 +1285,36 @@ export default function BookReader() {
       if (sentenceWithWord && settings.isSubtitleTranslationEnabled) {
         // Check if we have a translation for this sentence in subtitles
         const sentenceIdx = sentences.indexOf(sentenceWithWord);
-        const bookSubtitles = book?.subtitles?.[settings.subtitleLanguage]?.pages[currentPage];
+        const bookSubtitles = book?.subtitles?.[targetLang]?.pages[currentPage];
         const sentenceTranslation = bookSubtitles?.[sentenceIdx] || pageTranslations[sentenceIdx];
         
         if (sentenceTranslation) {
-          translation = await translateWordInContext(cleanWord, sentenceWithWord, sentenceTranslation, settings.subtitleLanguage, apiKey);
+          translation = await translateWordInContext(cleanWord, sentenceWithWord, sentenceTranslation, targetLang, apiKey);
         }
       }
 
       if (!translation) {
-        translation = await translateText(cleanWord, settings.subtitleLanguage, apiKey);
+        translation = await translateText(cleanWord, targetLang, apiKey);
       }
       
+      // 4. Save to Cache in Database
+      if (translation && book) {
+        const updatedSubtitles = { ...(book.subtitles || {}) };
+        if (!updatedSubtitles[targetLang]) {
+          updatedSubtitles[targetLang] = { pages: {}, lastUpdated: Date.now(), wordTranslations: {} };
+        }
+        if (!updatedSubtitles[targetLang].wordTranslations) {
+          updatedSubtitles[targetLang].wordTranslations = {};
+        }
+        
+        updatedSubtitles[targetLang].wordTranslations[cleanWord.toLowerCase()] = translation;
+        
+        const updatedBook = { ...book, subtitles: updatedSubtitles };
+        setBook(updatedBook);
+        updateBook(book.id, { subtitles: updatedSubtitles });
+        await db.saveBook(updatedBook);
+      }
+
       setAiResult({ type: 'trans', content: translation });
     } catch (err) {
       setAiResult({ type: 'trans', content: 'Error translating word.' });
@@ -2107,13 +2163,18 @@ export default function BookReader() {
             <Button 
               variant="ghost" 
               size="icon" 
+              disabled={!isPlaying}
               onClick={() => {
                 const newValue = !settings.isSubtitleTranslationEnabled;
                 updateSettings({ isSubtitleTranslationEnabled: newValue });
                 db.saveSettings({ ...settings, isSubtitleTranslationEnabled: newValue });
               }} 
-              title={`Toggle ${settings.subtitleLanguage} Subtitles`} 
-              className={cn("h-7 w-7 rounded-full", settings.isSubtitleTranslationEnabled ? (settings.theme === 'dark' ? "text-blue-400 bg-blue-900/30" : "text-blue-500 bg-blue-50") : (settings.theme === 'dark' ? "hover:bg-zinc-800 text-zinc-300" : ""))}
+              title={!isPlaying ? "Start playback to enable subtitles" : `Toggle ${settings.subtitleLanguage} Subtitles`} 
+              className={cn(
+                "h-7 w-7 rounded-full transition-opacity", 
+                !isPlaying && "opacity-30 grayscale cursor-not-allowed",
+                settings.isSubtitleTranslationEnabled && isPlaying ? (settings.theme === 'dark' ? "text-blue-400 bg-blue-900/30" : "text-blue-500 bg-blue-50") : (settings.theme === 'dark' ? "hover:bg-zinc-800 text-zinc-300" : "")
+              )}
             >
               <Captions size={14} />
             </Button>

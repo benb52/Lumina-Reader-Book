@@ -37,8 +37,10 @@ class RateLimiter {
         // 1. Global pause check (e.g. after a 429)
         if (now < this.pausedUntil) {
           const pauseDuration = this.pausedUntil - now;
+          appStore.getState().setIsWaitingForQuota(true);
           console.log(`[RateLimiter] Paused. Waiting ${Math.round(pauseDuration/1000)}s...`);
           await new Promise(r => setTimeout(r, pauseDuration));
+          appStore.getState().setIsWaitingForQuota(false);
           now = Date.now();
         }
 
@@ -65,9 +67,17 @@ class RateLimiter {
                                    errorStr.includes('error code: 6');
           
           if (isRateLimit || isTransientError) {
-            // If we hit a rate limit or transient error, pause the entire limiter for 60 seconds
-            this.pausedUntil = Date.now() + 60000;
-            console.warn(`[RateLimiter] Quota or Transient error hit. Pausing all requests for 60s.`);
+            // If we hit a rate limit or transient error, pause the entire limiter for 30 seconds
+            this.pausedUntil = Date.now() + 30000;
+            appStore.getState().setIsWaitingForQuota(true);
+            console.warn(`[RateLimiter] Quota or Transient error hit. Pausing all requests for 30s.`);
+            
+            // Auto-reset the waiting state after the pause
+            setTimeout(() => {
+              if (Date.now() >= this.pausedUntil) {
+                appStore.getState().setIsWaitingForQuota(false);
+              }
+            }, 31000);
           }
           reject(error);
         }
@@ -224,9 +234,9 @@ export const translateText = async (text: string, targetLang: string, apiKey: st
   return response.text?.trim() || '';
 };
 
-export const translateSentencesBatch = async (sentences: string[], targetLang: string, apiKey: string) => {
+export const translateSentencesBatch = async (sentences: string[], targetLang: string, apiKey: string): Promise<{ translations: string[], wordMap: { [word: string]: string } }> => {
   const finalApiKey = getEffectiveApiKey(apiKey);
-  if (!finalApiKey || sentences.length === 0) return [];
+  if (!finalApiKey || sentences.length === 0) return { translations: [], wordMap: {} };
   
   const ai = new GoogleGenAI({ apiKey: finalApiKey.trim() });
   handlePostCall();
@@ -235,16 +245,31 @@ export const translateSentencesBatch = async (sentences: string[], targetLang: s
   
   const response = await withRetry(() => ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: `Translate the following JSON array of objects to ${targetLang}. If ${targetLang} is Hebrew, you MUST translate it to Hebrew (עברית). Return a JSON array of objects with the exact same 'id' and a new 'trans' field containing the translation. Do not miss any IDs.\n\n${JSON.stringify(payload)}`,
+    contents: `Translate the following JSON array of objects to ${targetLang}. If ${targetLang} is Hebrew, you MUST translate it to Hebrew (עברית). 
+    Return a JSON object containing:
+    1. "translations": A JSON array of objects with the exact same 'id' and a new 'trans' field containing the translation.
+    2. "wordMap": A dictionary mapping important unique words/terms from the input sentences to their translations in ${targetLang}.
+    
+    Input JSON:
+    ${JSON.stringify(payload)}`,
     config: {
       responseMimeType: 'application/json',
       responseSchema: {
-        type: Type.ARRAY,
-        items: { 
-          type: Type.OBJECT,
-          properties: {
-            id: { type: Type.INTEGER },
-            trans: { type: Type.STRING }
+        type: Type.OBJECT,
+        properties: {
+          translations: {
+            type: Type.ARRAY,
+            items: { 
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.INTEGER },
+                trans: { type: Type.STRING }
+              }
+            }
+          },
+          wordMap: {
+            type: Type.OBJECT,
+            description: 'Mapping of unique words to translations'
           }
         }
       }
@@ -252,21 +277,62 @@ export const translateSentencesBatch = async (sentences: string[], targetLang: s
   }));
   
   try {
-    const result = JSON.parse(response.text || '[]');
-    if (Array.isArray(result)) {
+    const result = JSON.parse(response.text || '{}');
+    const translations = result.translations || [];
+    const wordMap = result.wordMap || {};
+    
+    if (Array.isArray(translations)) {
       const translatedArray = new Array(sentences.length).fill('');
-      result.forEach((item: any) => {
+      translations.forEach((item: any) => {
         if (item && typeof item.id === 'number' && item.id >= 0 && item.id < sentences.length) {
           translatedArray[item.id] = item.trans || '';
         }
       });
       // Fill in any blanks with the original text just in case
-      return translatedArray.map((t, i) => t || sentences[i]);
+      return { 
+        translations: translatedArray.map((t, i) => t || sentences[i]),
+        wordMap
+      };
     }
-    return [];
+    return { translations: [], wordMap: {} };
   } catch (e) {
     console.error('Failed to parse batch translation', e);
-    return [];
+    return { translations: [], wordMap: {} };
+  }
+};
+
+export const translateWordsBatch = async (words: string[], targetLang: string, apiKey: string): Promise<{ [word: string]: string }> => {
+  const finalApiKey = getEffectiveApiKey(apiKey);
+  if (!finalApiKey || words.length === 0) return {};
+  
+  console.log(`[AI] translateWordsBatch: Translating ${words.length} words to ${targetLang}`);
+  const ai = new GoogleGenAI({ apiKey: finalApiKey.trim() });
+  handlePostCall();
+  
+  const response = await withRetry(() => ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: `Translate the following list of words/terms to ${targetLang}. If ${targetLang} is Hebrew, you MUST translate it to Hebrew (עברית). 
+    Identify proper nouns (names of people, places, etc.) and handle them appropriately (usually keep them as is or transliterate if needed, but provide a translation if it's a common name).
+    Return a JSON object mapping each input word to its translation.
+    
+    Words:
+    ${JSON.stringify(words)}`,
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        description: 'Mapping of words to translations'
+      }
+    }
+  }));
+  
+  try {
+    const text = response.text || '{}';
+    return JSON.parse(text);
+  } catch (e) {
+    console.error('Failed to parse words batch translation. Raw text:', response.text);
+    console.error(e);
+    return {};
   }
 };
 

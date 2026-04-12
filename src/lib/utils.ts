@@ -14,3 +14,21 @@ export const getSentences = (text: string) => {
   if (!text) return [];
   return text.split(/(?<=[.!?\n])\s+/).filter(s => s.trim().length > 0);
 };
+
+export function getUniqueWords(text: string) {
+  if (!text) return [];
+  const clean = getCleanText(text);
+  // Remove punctuation but keep casing
+  const words = clean.replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, "").split(/\s+/);
+  // Filter out empty, single chars, and duplicates (case-insensitive for uniqueness but keep one version)
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const w of words) {
+    const trimmed = w.trim();
+    if (trimmed.length > 1 && !seen.has(trimmed.toLowerCase())) {
+      seen.add(trimmed.toLowerCase());
+      unique.push(trimmed);
+    }
+  }
+  return unique;
+}

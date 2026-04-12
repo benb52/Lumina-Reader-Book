@@ -35,6 +35,9 @@ export interface Book {
       pages: {
         [pageIndex: number]: string[];
       };
+      wordTranslations?: {
+        [word: string]: string;
+      };
       lastUpdated: number;
     };
   };
