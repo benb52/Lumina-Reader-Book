@@ -67,7 +67,7 @@ export default function Library() {
     setIsPasteModalOpen(false);
     
     try {
-      const parsedBook = parseTXT(pastedText);
+      const parsedBook = parseTXT(pastedText, true);
       
       const newBook: Book = {
         id: crypto.randomUUID(),

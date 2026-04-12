@@ -283,6 +283,24 @@ export const getDefinition = async (word: string, context: string, apiKey: strin
   return response.text || '';
 };
 
+export const translateWordInContext = async (word: string, sentence: string, sentenceTranslation: string, targetLang: string, apiKey: string) => {
+  const finalApiKey = getEffectiveApiKey(apiKey);
+  if (!finalApiKey) return '';
+  
+  const ai = new GoogleGenAI({ apiKey: finalApiKey.trim() });
+  handlePostCall();
+  const response = await withRetry(() => ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: `You are an expert translator. 
+    Original sentence: "${sentence}"
+    Translated sentence (${targetLang}): "${sentenceTranslation}"
+    
+    Find the exact translation of the word "${word}" from the original sentence as it appears in the translated sentence.
+    Output ONLY the translated word and nothing else. No punctuation unless it's part of the word.`,
+  }));
+  return response.text?.trim() || '';
+};
+
 const repairJson = (jsonStr: string) => {
   if (!jsonStr || typeof jsonStr !== 'string') return '{}';
   

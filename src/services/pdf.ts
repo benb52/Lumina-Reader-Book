@@ -275,7 +275,7 @@ function buildCleanTextStream(
  * מפצל את הטקסט הנקי לפסקאות עצמאיות.
  * פסקה = בלוק טקסט שמופרד מהבא אחריו בשורה ריקה אחת לפחות.
  */
-function splitIntoParagraphs(text: string): string[] {
+function splitIntoParagraphs(text: string, skipHeadings: boolean = false): string[] {
   // Split by double newline first
   const blocks = text.split(/\n{2,}/);
   const result: string[] = [];
@@ -289,7 +289,7 @@ function splitIntoParagraphs(text: string): string[] {
       const trimmed = line.trim();
       if (!trimmed) continue;
       
-      if (CHAPTER_HEADING_RE.test(trimmed) || isLikelyHeading(trimmed)) {
+      if (!skipHeadings && (CHAPTER_HEADING_RE.test(trimmed) || isLikelyHeading(trimmed))) {
         if (current) result.push(current.trim());
         result.push(trimmed);
         current = '';
@@ -318,7 +318,7 @@ interface DisplayPages {
  * ג. כותרת פרק תמיד מתחילה עמוד חדש.
  * ד. אם פסקה בודדת ארוכה מ-MAX_PAGE_CHARS — היא מקבלת עמוד משלה.
  */
-function buildDisplayPages(paragraphs: string[]): DisplayPages {
+function buildDisplayPages(paragraphs: string[], skipHeadings: boolean = false): DisplayPages {
   const pages: string[] = [];
   const chapters: { title: string; page: number }[] = [];
 
@@ -356,7 +356,7 @@ function buildDisplayPages(paragraphs: string[]): DisplayPages {
   };
 
   for (const para of paragraphs) {
-    const isChapterHeading = CHAPTER_HEADING_RE.test(para) || isLikelyHeading(para);
+    const isChapterHeading = !skipHeadings && (CHAPTER_HEADING_RE.test(para) || isLikelyHeading(para));
     const processedPara = isChapterHeading ? `<<BOLD_START>>${para}<<BOLD_END>>` : para;
 
     // כותרת פרק: פותחת עמוד חדש רק אם העמוד הקודם מכיל מספיק תוכן משמעותי.
@@ -499,9 +499,9 @@ function isLikelyHeading(text: string): boolean {
 /**
  * עבור קובץ טקסט רגיל — אותה חלוקה חכמה לפי פסקאות.
  */
-export function parseTXT(text: string): ParsedBook {
-  const paragraphs = splitIntoParagraphs(text);
-  const { pages, chapters } = buildDisplayPages(paragraphs);
+export function parseTXT(text: string, skipHeadings: boolean = false): ParsedBook {
+  const paragraphs = splitIntoParagraphs(text, skipHeadings);
+  const { pages, chapters } = buildDisplayPages(paragraphs, skipHeadings);
 
   const content = pages
     .map((page, i) => `<<PAGE:${i + 1}>>\n${page}\n<<LUMINA_PAGE_BREAK>>\n`)

@@ -6,7 +6,7 @@ import { db } from '../lib/db';
 import { Button } from '../components/ui/Button';
 import QuotesPanel from '../components/QuotesPanel';
 import XRayPanel from '../components/XRayPanel';
-import { getDefinition, translateText, generateSpeech, translateSentencesBatch, analyzeBookWithAI, analyzeSpeakers, analyzeSpeakersBatch, generateMultiSpeakerSpeech } from '../services/ai';
+import { getDefinition, translateText, generateSpeech, translateSentencesBatch, analyzeBookWithAI, analyzeSpeakers, analyzeSpeakersBatch, generateMultiSpeakerSpeech, translateWordInContext } from '../services/ai';
 import { applyKeriKetiv } from '../lib/hebrewUtils';
 import { cn, getCleanText, getSentences } from '../lib/utils';
 
@@ -98,6 +98,7 @@ export default function BookReader() {
   const [summaryText, setSummaryText] = useState('');
   const [isAnalyzingSummary, setIsAnalyzingSummary] = useState(false);
   const [isDramatizing, setIsDramatizing] = useState(false);
+  const [isTranslationModeActive, setIsTranslationModeActive] = useState(false);
   const [isDramatizingFullBook, setIsDramatizingFullBook] = useState(false);
   const [dramatizationProgress, setDramatizationProgress] = useState(0);
   const [showDramatizeConfirm, setShowDramatizeConfirm] = useState(false);
@@ -1228,6 +1229,44 @@ export default function BookReader() {
     saveProgress(currentPageRef.current, currentSentenceIndex);
   };
 
+  const handleWordClick = async (word: string, fullText: string) => {
+    const cleanWord = word.replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, "").trim();
+    if (!cleanWord) return;
+
+    setSelectedText(cleanWord);
+    setIsAiLoading(true);
+    setAiResult({ type: 'trans', content: '' });
+
+    try {
+      let translation = '';
+      
+      // Try to find sentence context
+      const sentences = getSentences(getCleanText(fullText));
+      const sentenceWithWord = sentences.find(s => s.includes(cleanWord));
+      
+      if (sentenceWithWord && settings.isSubtitleTranslationEnabled) {
+        // Check if we have a translation for this sentence in subtitles
+        const sentenceIdx = sentences.indexOf(sentenceWithWord);
+        const bookSubtitles = book?.subtitles?.[settings.subtitleLanguage]?.pages[currentPage];
+        const sentenceTranslation = bookSubtitles?.[sentenceIdx] || pageTranslations[sentenceIdx];
+        
+        if (sentenceTranslation) {
+          translation = await translateWordInContext(cleanWord, sentenceWithWord, sentenceTranslation, settings.subtitleLanguage, apiKey);
+        }
+      }
+
+      if (!translation) {
+        translation = await translateText(cleanWord, settings.subtitleLanguage, apiKey);
+      }
+      
+      setAiResult({ type: 'trans', content: translation });
+    } catch (err) {
+      setAiResult({ type: 'trans', content: 'Error translating word.' });
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
   const handleTextSelection = async (type: 'def' | 'trans' | 'quote') => {
     const selection = window.getSelection();
     if (!selection || selection.toString().trim() === '') return;
@@ -1391,6 +1430,25 @@ export default function BookReader() {
         if (isBold) className += "font-bold text-zinc-900 ";
         if (isUnderline) className += "underline decoration-zinc-400 underline-offset-4 ";
         if (isQuote) className += "bg-green-200/60 dark:bg-green-900/40 rounded px-1 ";
+
+        if (isTranslationModeActive) {
+          const words = part.split(/(\s+|[.,/#!$%^&*;:{}=\-_`~()])/);
+          return words.map((word, j) => {
+            if (word.trim() === '' || /^[.,/#!$%^&*;:{}=\-_`~()]+$/.test(word)) return word;
+            return (
+              <span 
+                key={`${i}-${j}`} 
+                className={cn(className, "cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors border-b border-transparent hover:border-blue-300")}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleWordClick(word, pages[currentPage]);
+                }}
+              >
+                {word}
+              </span>
+            );
+          });
+        }
 
         if (className) {
            return <span key={i} className={className.trim()}>{part}</span>;
@@ -1952,6 +2010,17 @@ export default function BookReader() {
           </div>
         )}
 
+        {/* Translation Mode Indicator */}
+        {isTranslationModeActive && (
+          <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 p-2 px-4 bg-blue-500 text-white rounded-full text-xs font-medium shadow-lg animate-in fade-in slide-in-from-top-2 flex items-center gap-2">
+            <Languages size={12} />
+            <span>Tap any word to translate</span>
+            <button onClick={() => setIsTranslationModeActive(false)} className="ml-2 hover:bg-white/20 rounded-full p-0.5">
+              <X size={12} />
+            </button>
+          </div>
+        )}
+
         {/* AI Modal Overlay */}
         {aiResult.type && (
           <div className="fixed top-20 right-4 md:right-8 w-80 bg-white rounded-2xl shadow-xl border border-zinc-200 p-5 z-50 animate-in fade-in slide-in-from-top-4">
@@ -2016,7 +2085,23 @@ export default function BookReader() {
             <Button variant="ghost" size="icon" onClick={() => handleTextSelection('def')} title="Define selected text" className={cn("hidden sm:inline-flex h-7 w-7 rounded-full", settings.theme === 'dark' ? "hover:bg-zinc-800 text-zinc-300" : "")}>
               <Search size={14} />
             </Button>
-            <Button variant="ghost" size="icon" onClick={() => handleTextSelection('trans')} title="Translate selected text" className={cn("h-7 w-7 rounded-full", settings.theme === 'dark' ? "hover:bg-zinc-800 text-zinc-300" : "")}>
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              onClick={() => {
+                const selection = window.getSelection();
+                if (selection && selection.toString().trim() !== '') {
+                  handleTextSelection('trans');
+                } else {
+                  setIsTranslationModeActive(!isTranslationModeActive);
+                }
+              }} 
+              title={isTranslationModeActive ? "Disable Tap to Translate" : "Enable Tap to Translate"} 
+              className={cn(
+                "h-7 w-7 rounded-full", 
+                isTranslationModeActive ? (settings.theme === 'dark' ? "text-blue-400 bg-blue-900/30" : "text-blue-500 bg-blue-50") : (settings.theme === 'dark' ? "hover:bg-zinc-800 text-zinc-300" : "")
+              )}
+            >
               <Languages size={14} />
             </Button>
             <Button 
