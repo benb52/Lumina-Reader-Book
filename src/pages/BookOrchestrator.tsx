@@ -43,6 +43,7 @@ export default function BookOrchestrator() {
   const [aiChunkSizeMultiplier, setAiChunkSizeMultiplier] = useState<number>(1);
   const [geminiVoice, setGeminiVoice] = useState<'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' | 'Aoede' | 'Orpheus' | 'Cassiopeia'>('Zephyr');
   const [targetSubtitleLanguage, setTargetSubtitleLanguage] = useState<string>('Hebrew');
+  const [isSubtitleTranslationEnabled, setIsSubtitleTranslationEnabled] = useState<boolean>(false);
   const [isGeneratingSubtitles, setIsGeneratingSubtitles] = useState(false);
   const [subtitleProgress, setSubtitleProgress] = useState(0);
   const [cancelSubtitles, setCancelSubtitles] = useState(false);
@@ -95,9 +96,11 @@ export default function BookOrchestrator() {
       setTextDirection(b.textDirection || 'ltr');
       setKeriKetivEnabled(b.keriKetivEnabled !== false);
       setIsDramatizedReadingEnabled(!!b.isDramatizedReadingEnabled);
-      setTtsProvider(b.ttsProvider || settings.ttsProvider || 'browser');
+      setTtsProvider(b.ttsProvider || 'browser');
       setAiChunkSizeMultiplier(b.aiChunkSizeMultiplier || settings.aiChunkSizeMultiplier || 1);
       setGeminiVoice(b.geminiVoice || settings.geminiVoice || 'Zephyr');
+      setTargetSubtitleLanguage(b.subtitleLanguage || settings.subtitleLanguage || 'Hebrew');
+      setIsSubtitleTranslationEnabled(b.isSubtitleTranslationEnabled ?? settings.isSubtitleTranslationEnabled ?? false);
       
       const voices = b.dramatization?.speakerVoices || {};
       const genders = b.dramatization?.speakerGenders || {};
@@ -197,29 +200,43 @@ export default function BookOrchestrator() {
     
     setSubtitleProgress(existingSubProgress);
 
+    const BATCH_SIZE = aiChunkSizeMultiplier;
     try {
-      for (let i = 0; i < pages.length; i++) {
+      for (let i = 0; i < pages.length; i += BATCH_SIZE) {
         if (cancelRef.current) break;
 
-        // Skip if already translated and not starting fresh
-        if (!startFresh && currentSubtitles[i]) {
-          setSubtitleProgress(Math.round(((i + 1) / pages.length) * 100));
+        const batchPages: { index: number, sentences: string[] }[] = [];
+        for (let j = 0; j < BATCH_SIZE && (i + j) < pages.length; j++) {
+          const pageIdx = i + j;
+          // Skip if already translated and not starting fresh
+          if (!startFresh && currentSubtitles[pageIdx]) {
+            continue;
+          }
+
+          const cleanText = getCleanText(pages[pageIdx]);
+          if (!cleanText.trim()) {
+            currentSubtitles[pageIdx] = [];
+            continue;
+          }
+
+          // Split into sentences for better translation quality
+          batchPages.push({ index: pageIdx, sentences: getSentences(cleanText) });
+        }
+
+        if (batchPages.length === 0) {
+          setSubtitleProgress(Math.min(100, Math.round(((i + BATCH_SIZE) / pages.length) * 100)));
           continue;
         }
 
-        const cleanText = getCleanText(pages[i]);
-        if (!cleanText.trim()) {
-          currentSubtitles[i] = [];
-          setSubtitleProgress(Math.round(((i + 1) / pages.length) * 100));
-          continue;
-        }
-
-        // Split into sentences for better translation quality
-        const sentences = getSentences(cleanText);
-        const { translations, wordMap } = await translateSentencesBatch(sentences, targetSubtitleLanguage, apiKey);
+        const allSentences = batchPages.flatMap(p => p.sentences);
+        const { translations, wordMap } = await translateSentencesBatch(allSentences, targetSubtitleLanguage, apiKey);
         
         if (translations && translations.length > 0) {
-          currentSubtitles[i] = translations;
+          let offset = 0;
+          batchPages.forEach(p => {
+            currentSubtitles[p.index] = translations.slice(offset, offset + p.sentences.length);
+            offset += p.sentences.length;
+          });
         }
 
         if (wordMap) {
@@ -229,8 +246,8 @@ export default function BookOrchestrator() {
           });
         }
 
-        // Save incrementally every 5 pages to be safer and more efficient
-        if ((i + 1) % 5 === 0 || i === pages.length - 1) {
+        // Save incrementally every 5 batches to be safer and more efficient
+        if (Math.floor(i / BATCH_SIZE) % 5 === 0 || i + BATCH_SIZE >= pages.length) {
           const updatedSubtitles = {
             ...(latestBook.subtitles || {}),
             [targetSubtitleLanguage]: {
@@ -246,7 +263,7 @@ export default function BookOrchestrator() {
           await db.updateBookField(book.id, 'subtitles', updatedSubtitles);
         }
 
-        setSubtitleProgress(Math.round(((i + 1) / pages.length) * 100));
+        setSubtitleProgress(Math.min(100, Math.round(((i + BATCH_SIZE) / pages.length) * 100)));
         
         // Small delay to be kind to the API
         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -406,6 +423,8 @@ export default function BookOrchestrator() {
         ttsProvider,
         aiChunkSizeMultiplier,
         geminiVoice,
+        subtitleLanguage: targetSubtitleLanguage,
+        isSubtitleTranslationEnabled,
         dramatization: updatedDramatization
       };
       await db.saveBook(updatedBook);
@@ -422,6 +441,8 @@ export default function BookOrchestrator() {
         ttsProvider,
         aiChunkSizeMultiplier,
         geminiVoice,
+        subtitleLanguage: targetSubtitleLanguage,
+        isSubtitleTranslationEnabled,
         dramatization: updatedDramatization
       });
       navigate('/', { state: { message: `Book "${bookTitle}" saved successfully!` } });
@@ -450,7 +471,7 @@ export default function BookOrchestrator() {
     let currentPagesDramatization = startFresh ? {} : { ...(book.dramatization?.pages || {}) };
     let latestBook = book;
     
-    const BATCH_SIZE = 1;
+    const BATCH_SIZE = aiChunkSizeMultiplier;
     let batchCount = 0;
 
     let hasError = false;
@@ -599,7 +620,7 @@ export default function BookOrchestrator() {
         ? `שלום, אני ${voiceName}. ככה אני נשמע בקריאה של הספר.`
         : `Hello, I am ${voiceName}. This is how I sound in the reading of the book.`;
 
-      if (settings.ttsProvider === 'browser') {
+      if (ttsProvider === 'browser') {
         const utterance = new SpeechSynthesisUtterance(text);
         const selectedVoice = availableBrowserVoices.find(v => v.name === voiceName);
         if (selectedVoice) utterance.voice = selectedVoice;
@@ -876,7 +897,7 @@ export default function BookOrchestrator() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
               <label className="block text-sm font-medium text-zinc-700 mb-1">
-                TTS Provider for this Book
+                TTS Provider
               </label>
               <select
                 value={ttsProvider}
@@ -900,9 +921,9 @@ export default function BookOrchestrator() {
                 onChange={(e) => setAiChunkSizeMultiplier(parseInt(e.target.value))}
                 className="w-full px-3 py-2 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white"
               >
-                <option value="1">1x (Default - Faster)</option>
-                <option value="2">2x (Longer context)</option>
-                <option value="3">3x (Max context - Saves calls)</option>
+                <option value="1">1x (Faster - 1 page per call)</option>
+                <option value="2">2x (Longer - 2 pages per call)</option>
+                <option value="3">3x (Max - 3 pages per call)</option>
               </select>
               <p className="text-[10px] text-zinc-500 mt-1">
                 Send more text to Gemini at once to reduce the number of API calls for this specific book.
@@ -945,11 +966,11 @@ export default function BookOrchestrator() {
               <label className="text-xs font-medium text-zinc-700 mb-1.5 block">Select Voice for this Book</label>
               <div className="flex items-center gap-3">
                 <select
-                  value={speakerVoices['Narrator'] || (settings.ttsProvider === 'gemini' ? 'Zephyr' : '')}
+                  value={speakerVoices['Narrator'] || (ttsProvider === 'gemini' ? 'Zephyr' : '')}
                   onChange={(e) => handleVoiceChange('Narrator', e.target.value)}
                   className="flex-1 px-3 py-2 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white"
                 >
-                  {settings.ttsProvider === 'gemini' ? (
+                  {ttsProvider === 'gemini' ? (
                     getAvailableVoices(bookLanguage.toLowerCase() === 'hebrew').map(v => (
                       <option key={v.id} value={v.id}>{v.name} ({v.description})</option>
                     ))
@@ -1007,6 +1028,20 @@ export default function BookOrchestrator() {
                 <option value="Japanese">Japanese</option>
                 <option value="Chinese">Chinese</option>
               </select>
+            </div>
+            <div className="flex flex-col gap-1.5 flex-1">
+              <label className="text-xs font-medium text-zinc-700">Enable Subtitles</label>
+              <div className="flex items-center h-[38px]">
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    className="sr-only peer" 
+                    checked={isSubtitleTranslationEnabled}
+                    onChange={(e) => setIsSubtitleTranslationEnabled(e.target.checked)}
+                  />
+                  <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
+              </div>
             </div>
             <div className="flex flex-wrap gap-2 pt-5">
               <Button 

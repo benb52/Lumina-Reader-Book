@@ -30,6 +30,8 @@ export interface Book {
   ttsProvider?: 'browser' | 'gemini';
   aiChunkSizeMultiplier?: number;
   geminiVoice?: 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' | 'Aoede' | 'Orpheus' | 'Cassiopeia';
+  subtitleLanguage?: string;
+  isSubtitleTranslationEnabled?: boolean;
   subtitles?: {
     [language: string]: {
       pages: {
@@ -85,11 +87,9 @@ export interface AppSettings {
   fontSize: number;
   fontFamily: string;
   ttsSpeed: number;
-  ttsVoice: string;
   dailyGoalPages: number;
   apiKey: string;
   highlightStyle: 'yellow-bg' | 'underline' | 'bold' | 'text-blue' | 'character-based';
-  ttsProvider: 'browser' | 'gemini';
   geminiVoice: 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' | 'Aoede' | 'Orpheus' | 'Cassiopeia';
   subtitleLanguage: string;
   autoTurnPage: boolean;
@@ -135,11 +135,9 @@ export const useStore = create<AppState>()(
         fontSize: 18,
         fontFamily: 'serif',
         ttsSpeed: 1.0,
-        ttsVoice: 'Google US English',
         dailyGoalPages: 30,
         apiKey: '',
         highlightStyle: 'yellow-bg',
-        ttsProvider: 'browser',
         geminiVoice: 'Kore',
         subtitleLanguage: 'Hebrew',
         autoTurnPage: false,

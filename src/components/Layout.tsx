@@ -5,6 +5,7 @@ import { useStore } from '../store/useStore';
 import { cn } from '../lib/utils';
 import { auth } from '../lib/firebase';
 import { Button } from './ui/Button';
+import { motion, AnimatePresence } from 'motion/react';
 
 export default function Layout() {
   const location = useLocation();
@@ -86,44 +87,60 @@ export default function Layout() {
       </header>
 
       {/* Mobile Navigation Menu */}
-      {isMobileMenuOpen && (
-        <div className="md:hidden absolute top-16 left-0 right-0 bg-white border-b border-zinc-200 shadow-lg z-30 flex flex-col p-4 gap-2">
-          {navItems.map((item) => {
-            const isActive = location.pathname === item.path;
-            return (
-              <Link
-                key={item.name}
-                to={item.path}
-                onClick={() => setIsMobileMenuOpen(false)}
-                className={cn(
-                  'flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-colors',
-                  isActive
-                    ? 'bg-zinc-100 text-zinc-900'
-                    : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900'
-                )}
+      <AnimatePresence>
+        {isMobileMenuOpen && (
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsMobileMenuOpen(false)}
+              className="fixed inset-0 bg-black/20 backdrop-blur-sm z-20 md:hidden"
+            />
+            <motion.div 
+              initial={{ y: -20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: -20, opacity: 0 }}
+              className="md:hidden absolute top-16 left-0 right-0 bg-white border-b border-zinc-200 shadow-lg z-30 flex flex-col p-4 gap-2"
+            >
+              {navItems.map((item) => {
+                const isActive = location.pathname === item.path;
+                return (
+                  <Link
+                    key={item.name}
+                    to={item.path}
+                    onClick={() => setIsMobileMenuOpen(false)}
+                    className={cn(
+                      'flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-colors',
+                      isActive
+                        ? 'bg-zinc-100 text-zinc-900'
+                        : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900'
+                    )}
+                  >
+                    <item.icon size={18} />
+                    {item.name}
+                  </Link>
+                );
+              })}
+              <div className="h-px bg-zinc-200 my-2" />
+              <div className="px-4 py-2 flex flex-col group cursor-default">
+                <span className="text-sm font-medium text-zinc-900">{user?.name || user?.email}</span>
+                <span className="text-xs text-zinc-500 opacity-0 group-hover:opacity-100 transition-opacity duration-200 select-none">{user?.email}</span>
+              </div>
+              <button
+                onClick={() => {
+                  setIsMobileMenuOpen(false);
+                  handleLogout();
+                }}
+                className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 transition-colors"
               >
-                <item.icon size={18} />
-                {item.name}
-              </Link>
-            );
-          })}
-          <div className="h-px bg-zinc-200 my-2" />
-          <div className="px-4 py-2 flex flex-col group cursor-default">
-            <span className="text-sm font-medium text-zinc-900">{user?.name || user?.email}</span>
-            <span className="text-xs text-zinc-500 opacity-0 group-hover:opacity-100 transition-opacity duration-200 select-none">{user?.email}</span>
-          </div>
-          <button
-            onClick={() => {
-              setIsMobileMenuOpen(false);
-              handleLogout();
-            }}
-            className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900 transition-colors"
-          >
-            <LogOut size={18} />
-            Logout
-          </button>
-        </div>
-      )}
+                <LogOut size={18} />
+                Logout
+              </button>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
 
       {/* Main Content */}
       <main className="flex-1 overflow-auto">

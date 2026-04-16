@@ -496,15 +496,15 @@ export default function Library() {
           )}
         </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-x-4 gap-y-12 md:gap-x-8 md:gap-y-16 mt-8">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-x-3 md:gap-x-8 gap-y-10 md:gap-y-16 mt-8">
           {displayedBooks.map((book, index) => (
             <div
               key={book.id}
               className="group relative flex flex-col items-center"
             >
               {/* Shelf Base (Connects with adjacent items) */}
-              <div className="absolute -bottom-4 left-[-1rem] right-[-1rem] md:left-[-2rem] md:right-[-2rem] h-4 bg-zinc-200/80 shadow-[0_4px_6px_-1px_rgba(0,0,0,0.1)] z-0" />
-              <div className="absolute -bottom-4 left-[-1rem] right-[-1rem] md:left-[-2rem] md:right-[-2rem] h-1 bg-zinc-300/50 z-0" />
+              <div className="absolute -bottom-4 left-[-0.75rem] right-[-0.75rem] md:left-[-2rem] md:right-[-2rem] h-3 md:h-4 bg-zinc-200/80 shadow-[0_4px_6px_-1px_rgba(0,0,0,0.1)] z-0" />
+              <div className="absolute -bottom-4 left-[-0.75rem] right-[-0.75rem] md:left-[-2rem] md:right-[-2rem] h-0.5 md:h-1 bg-zinc-300/50 z-0" />
 
               {/* Book Number */}
               <div className="absolute -top-3 -left-2 bg-zinc-900 text-white text-[10px] font-bold px-2 py-0.5 rounded-full z-20 shadow-sm">

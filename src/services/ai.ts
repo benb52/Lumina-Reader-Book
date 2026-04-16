@@ -99,15 +99,17 @@ class RateLimiter {
 
 const limiter = new RateLimiter();
 
-export const withRetry = async <T>(fn: () => Promise<T>, maxRetries = 12, initialDelay = 30000): Promise<T> => {
+export const withRetry = async <T>(fn: () => Promise<T>, maxRetries = 12, initialDelay = 30000, checkAbort?: () => boolean): Promise<T> => {
   let retries = 0;
   while (true) {
+    if (checkAbort && !checkAbort()) throw new Error('ABORTED');
     try {
       // Use the rate limiter for all AI calls
       const result = await limiter.schedule(fn);
       appStore.getState().setIsWaitingForQuota(false);
       return result;
     } catch (error: any) {
+      if (error?.message === 'ABORTED') throw error;
       const errorStr = (error?.message || JSON.stringify(error)).toLowerCase();
       const isRateLimit = errorStr.includes('429') || 
                           errorStr.includes('resource_exhausted') || 
@@ -592,7 +594,7 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
   }
 };
 
-export const analyzeSpeakers = async (text: string, apiKey: string, existingSpeakerVoices: { [name: string]: string } = {}, language: string = 'English') => {
+export const analyzeSpeakers = async (text: string, apiKey: string, existingSpeakerVoices: { [name: string]: string } = {}, language: string = 'English', checkAbort?: () => boolean) => {
   const finalApiKey = getEffectiveApiKey(apiKey);
   if (!finalApiKey) throw new Error('API Key required.');
   const ai = new GoogleGenAI({ apiKey: finalApiKey.trim() });
@@ -605,9 +607,11 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
     - The output segments MUST preserve all Hebrew punctuation and vocalization (nikud) if present.
     ` : '';
 
-  const response = await withRetry(() => ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: `Analyze the following book text professionally. The book is written in ${language}. Break it down into segments and identify who is speaking each segment.
+  const response = await withRetry(() => {
+    if (checkAbort && !checkAbort()) throw new Error('ABORTED');
+    return ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: `Analyze the following book text professionally. The book is written in ${language}. Break it down into segments and identify who is speaking each segment.
     
     GUIDELINES:
     1. If it's the narrator, the speaker is "Narrator".
@@ -669,7 +673,8 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
         },
       },
     },
-  }));
+  });
+}, 12, 30000, checkAbort);
 
   try {
     const rawText = response.text || '{}';
@@ -680,26 +685,30 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
   }
 };
 
-export const generateSpeech = async (text: string, voiceName: string, apiKey: string) => {
+export const generateSpeech = async (text: string, voiceName: string, apiKey: string, checkAbort?: () => boolean) => {
   const finalApiKey = getEffectiveApiKey(apiKey);
   if (!finalApiKey) throw new Error('API Key required for Gemini TTS.');
   if (!text.trim()) return '';
+  if (checkAbort && !checkAbort()) return '';
 
   const ai = new GoogleGenAI({ apiKey: finalApiKey.trim() });
   handlePostCall();
   
-  const response = await withRetry(() => ai.models.generateContent({
-    model: 'gemini-2.5-flash-preview-tts',
-    contents: [{ parts: [{ text }] }],
-    config: {
-      responseModalities: [Modality.AUDIO],
-      speechConfig: {
-        voiceConfig: {
-          prebuiltVoiceConfig: { voiceName },
+  const response = await withRetry(() => {
+    if (checkAbort && !checkAbort()) throw new Error('ABORTED');
+    return ai.models.generateContent({
+      model: 'gemini-3.1-flash-tts-preview',
+      contents: [{ parts: [{ text }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName },
+          },
         },
       },
-    },
-  }));
+    });
+  }, 12, 30000, checkAbort);
 
   const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
   if (!base64Audio) {
@@ -751,7 +760,8 @@ export const generateMultiSpeakerSpeech = async (
   segments: { text: string; speaker: string; voice: string }[],
   apiKey: string,
   overriddenVoices: { [name: string]: string } = {},
-  onChunkReady?: (audio: string, segmentTimings: { start: number; end: number; segmentIdx: number }[]) => void
+  onChunkReady?: (audio: string, segmentTimings: { start: number; end: number; segmentIdx: number }[]) => void,
+  shouldContinue?: () => boolean
 ): Promise<{ audio: string; segmentTimings: { start: number; end: number; segmentIdx: number }[] }> => {
   const finalApiKey = getEffectiveApiKey(apiKey);
   if (!finalApiKey) throw new Error('API Key required for Gemini TTS.');
@@ -767,12 +777,13 @@ export const generateMultiSpeakerSpeech = async (
 
   // Helper to generate audio for a chunk of segments with at most 2 speakers
   const generateChunkAudio = async (chunkSegments: { text: string; speaker: string; voice: string }[]) => {
+    if (shouldContinue && !shouldContinue()) return null;
     const uniqueSpeakers = Array.from(new Set(chunkSegments.map(s => s.speaker)));
     
     if (uniqueSpeakers.length <= 1) {
       const text = chunkSegments.map(s => s.text).join(' ');
       const voice = chunkSegments[0]?.voice || 'Kore';
-      return generateSpeech(text, voice, apiKey);
+      return generateSpeech(text, voice, apiKey, shouldContinue);
     }
 
     const prompt = chunkSegments.map(s => `${s.speaker}: ${s.text}`).join('\n');
@@ -788,18 +799,21 @@ export const generateMultiSpeakerSpeech = async (
 
     handlePostCall();
     try {
-      const response = await withRetry(() => ai.models.generateContent({
-        model: 'gemini-2.5-flash-preview-tts',
-        contents: [{ parts: [{ text: prompt }] }],
-        config: {
-          responseModalities: [Modality.AUDIO],
-          speechConfig: {
-            multiSpeakerVoiceConfig: {
-              speakerVoiceConfigs
+      const response = await withRetry(() => {
+        if (shouldContinue && !shouldContinue()) throw new Error('ABORTED');
+        return ai.models.generateContent({
+          model: 'gemini-3.1-flash-tts-preview',
+          contents: [{ parts: [{ text: prompt }] }],
+          config: {
+            responseModalities: [Modality.AUDIO],
+            speechConfig: {
+              multiSpeakerVoiceConfig: {
+                speakerVoiceConfigs
+              }
             }
           }
-        }
-      }));
+        });
+      }, 12, 30000, shouldContinue);
 
       const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
       if (!base64Audio) {
@@ -852,6 +866,7 @@ export const generateMultiSpeakerSpeech = async (
   const tempCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
 
   for (let i = 0; i < chunks.length; i++) {
+    if (shouldContinue && !shouldContinue()) break;
     const chunk = chunks[i];
     const audio = await generateChunkAudio(chunk);
     if (audio) {

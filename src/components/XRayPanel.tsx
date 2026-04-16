@@ -29,7 +29,7 @@ export default function XRayPanel({
   ];
 
   return (
-    <div className="absolute top-0 right-0 h-full w-80 bg-white border-l border-zinc-200 shadow-xl flex flex-col z-40 animate-in slide-in-from-right">
+    <div className="fixed md:absolute inset-y-0 right-0 w-full md:w-80 bg-white border-l border-zinc-200 shadow-xl flex flex-col z-[60] animate-in slide-in-from-right-full md:slide-in-from-right">
       <div className="p-4 border-b border-zinc-200 flex items-center justify-between bg-zinc-50">
         <h2 className="font-semibold text-zinc-900 flex items-center gap-2">
           <Zap size={18} className="text-yellow-500" />

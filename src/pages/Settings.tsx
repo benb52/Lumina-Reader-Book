@@ -102,7 +102,7 @@ export default function Settings() {
   };
 
   return (
-    <div className="p-8 max-w-3xl mx-auto">
+    <div className="p-4 md:p-8 max-w-3xl mx-auto">
       <div className="mb-8">
         <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">Settings</h1>
         <p className="text-zinc-500 mt-1">Manage your AI integrations and reading preferences.</p>
@@ -358,48 +358,6 @@ export default function Settings() {
               </select>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-zinc-700 mb-1">
-                TTS Provider (Global Default)
-              </label>
-              <select
-                value={localSettings.ttsProvider || 'browser'}
-                onChange={(e) => setLocalSettings({ ...localSettings, ttsProvider: e.target.value as any })}
-                className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white"
-              >
-                <option value="browser">Browser Native</option>
-                <option value="gemini">Gemini API (High Quality)</option>
-              </select>
-              <p className="text-xs text-zinc-500 mt-1">
-                Default reading mode. Can be overridden per book in Edit Book.
-              </p>
-              {localSettings.ttsProvider === 'gemini' && !localSettings.apiKey && (
-                <p className="text-xs text-red-500 mt-1">Requires Gemini API Key above.</p>
-              )}
-            </div>
-
-            {localSettings.ttsProvider === 'gemini' && (
-              <div>
-                <label className="block text-sm font-medium text-zinc-700 mb-1">
-                  Character Voice
-                </label>
-                <select
-                  value={localSettings.geminiVoice || 'Kore'}
-                  onChange={(e) => setLocalSettings({ ...localSettings, geminiVoice: e.target.value as any })}
-                  className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white disabled:bg-zinc-50 disabled:cursor-not-allowed"
-                >
-                  <option value="Puck">Puck (Male)</option>
-                  <option value="Charon">Charon (Male)</option>
-                  <option value="Kore">Kore (Female)</option>
-                  <option value="Fenrir">Fenrir (Male)</option>
-                  <option value="Zephyr">Zephyr (Female)</option>
-                  <option value="Aoede">Aoede (Female)</option>
-                  <option value="Orpheus">Orpheus (Male)</option>
-                  <option value="Cassiopeia">Cassiopeia (Female)</option>
-                </select>
-              </div>
-            )}
-
             {localSettings.ttsProvider === 'browser' && (
               <div>
                 <label className="block text-sm font-medium text-zinc-700 mb-1">
@@ -436,25 +394,6 @@ export default function Settings() {
               />
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-zinc-700 mb-1">
-                Subtitle Language
-              </label>
-              <select
-                value={localSettings.subtitleLanguage || 'Hebrew'}
-                onChange={(e) => setLocalSettings({ ...localSettings, subtitleLanguage: e.target.value })}
-                className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white"
-              >
-                <option value="Hebrew">Hebrew</option>
-                <option value="English">English</option>
-                <option value="Spanish">Spanish</option>
-                <option value="French">French</option>
-                <option value="German">German</option>
-                <option value="Russian">Russian</option>
-                <option value="Arabic">Arabic</option>
-              </select>
-            </div>
-
             <div className="flex items-center justify-between p-4 border border-zinc-200 rounded-xl bg-zinc-50/50">
               <div>
                 <label className="block text-sm font-medium text-zinc-900">
@@ -475,25 +414,6 @@ export default function Settings() {
               </label>
             </div>
 
-            <div className="flex items-center justify-between p-4 border border-zinc-200 rounded-xl bg-zinc-50/50">
-              <div>
-                <label className="block text-sm font-medium text-zinc-900">
-                  Enable Subtitles
-                </label>
-                <p className="text-xs text-zinc-500 mt-0.5">
-                  Show translated subtitles while reading.
-                </p>
-              </div>
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input 
-                  type="checkbox" 
-                  className="sr-only peer" 
-                  checked={!!localSettings.isSubtitleTranslationEnabled}
-                  onChange={(e) => setLocalSettings({ ...localSettings, isSubtitleTranslationEnabled: e.target.checked })}
-                />
-                <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-zinc-900"></div>
-              </label>
-            </div>
             <div className="flex items-center justify-between p-4 border border-zinc-200 rounded-xl bg-zinc-50/50">
               <div>
                 <label className="block text-sm font-medium text-zinc-900">

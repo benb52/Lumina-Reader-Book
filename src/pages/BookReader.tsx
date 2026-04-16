@@ -149,14 +149,19 @@ export default function BookReader() {
   const apiCallCount = useStore((state) => state.apiCallCount);
   const apiKey = settings.apiKey;
 
+  const effectiveSubtitleLanguage = book?.subtitleLanguage || settings.subtitleLanguage || 'Hebrew';
+  const effectiveIsSubtitleTranslationEnabled = book?.isSubtitleTranslationEnabled ?? settings.isSubtitleTranslationEnabled ?? false;
+  const effectiveGeminiVoice = book?.geminiVoice || settings.geminiVoice || 'Kore';
+
   const synthRef = useRef<SpeechSynthesis | null>(null);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const isGeneratingChunksRef = useRef(false);
 
   // Refs to fix closure issues in async recursive functions
   const settingsRef = useRef(settings);
-  const isSubtitleTranslationEnabledRef = useRef(settings.isSubtitleTranslationEnabled);
+  const isSubtitleTranslationEnabledRef = useRef(effectiveIsSubtitleTranslationEnabled);
   const apiKeyRef = useRef(apiKey);
   const isPlayingRef = useRef(isPlaying);
   const currentPageRef = useRef(currentPage);
@@ -168,7 +173,7 @@ export default function BookReader() {
 
   useEffect(() => {
     settingsRef.current = settings;
-    isSubtitleTranslationEnabledRef.current = settings.isSubtitleTranslationEnabled;
+    isSubtitleTranslationEnabledRef.current = effectiveIsSubtitleTranslationEnabled;
     apiKeyRef.current = apiKey;
     isPlayingRef.current = isPlaying;
     currentPageRef.current = currentPage;
@@ -179,6 +184,101 @@ export default function BookReader() {
     currentSegmentIndexRef.current = currentSegmentIndex;
   }, [settings, apiKey, isPlaying, currentPage, pages, isTurningPage, currentSentenceIndex, currentSegmentIndex]);
 
+  const [isTtsSlow, setIsTtsSlow] = useState(false);
+
+  useEffect(() => {
+    let timeout: any;
+    if (isTtsLoading) {
+      timeout = setTimeout(() => {
+        setIsTtsSlow(true);
+      }, 10000);
+    } else {
+      setIsTtsSlow(false);
+    }
+    return () => clearTimeout(timeout);
+  }, [isTtsLoading]);
+
+  useEffect(() => {
+    let timeout: any;
+    if (isTurningPage) {
+      timeout = setTimeout(() => {
+        console.warn("[Reader] Page turn stuck? Auto-resetting...");
+        setIsTurningPage(false);
+      }, 15000);
+    }
+    return () => clearTimeout(timeout);
+  }, [isTurningPage]);
+
+  useEffect(() => {
+    let timeout: any;
+    if (isTtsLoading) {
+      timeout = setTimeout(() => {
+        console.warn("[TTS] TTS loading stuck? Auto-resetting...");
+        setIsTtsLoading(false);
+      }, 120000); // Increased to 120s to allow for multiple retries
+    }
+    return () => clearTimeout(timeout);
+  }, [isTtsLoading]);
+
+  useEffect(() => {
+    let timeout: any;
+    if (isDramatizing) {
+      timeout = setTimeout(() => {
+        console.warn("[Reader] Dramatization stuck? Auto-resetting...");
+        setIsDramatizing(false);
+      }, 180000); // Increased to 180s
+    }
+    return () => clearTimeout(timeout);
+  }, [isDramatizing]);
+
+  // Background pre-dramatization for next page
+  useEffect(() => {
+    if (!book || !apiKey || !book.isDramatizedReadingEnabled || isDramatizing || isDramatizingFullBook) return;
+    
+    const nextPage = currentPage + 1;
+    if (nextPage < pages.length && (!book.dramatization?.pages || !book.dramatization.pages[nextPage])) {
+      // Only pre-dramatize if we are playing or if the user is near the end of the current page
+      const currentSentences = getSentences(getCleanText(pages[currentPage]));
+      const shouldPreDramatize = isPlaying || (currentSentenceIndex !== null && currentSentenceIndex > currentSentences.length * 0.7);
+      
+      if (shouldPreDramatize) {
+        console.log(`[Reader] Pre-dramatizing next page (${nextPage}) in background...`);
+        const cleanText = getCleanText(pages[nextPage]);
+        const existingVoices = book.dramatization?.speakerVoices || {};
+        const existingGenders = book.dramatization?.speakerGenders || {};
+        
+        analyzeSpeakers(cleanText, apiKey, existingVoices, book.language || 'English', () => isPlayingRef.current)
+          .then(result => {
+            if (result && result.segments) {
+              const newSpeakerVoices = { ...existingVoices, ...(result.newSpeakerVoices || {}) };
+              const newSpeakerGenders = { ...existingGenders, ...(result.speakerGenders || {}) };
+              
+              const segmentsWithVoices = result.segments.map((s: any) => ({
+                ...s,
+                voice: newSpeakerVoices[s.speaker] || (newSpeakerGenders[s.speaker] === 'female' ? 'Zephyr' : newSpeakerGenders[s.speaker] === 'male' ? 'Charon' : 'Puck')
+              }));
+
+              const updatedDramatization = {
+                pages: {
+                  ...(book.dramatization?.pages || {}),
+                  [nextPage]: { segments: segmentsWithVoices }
+                },
+                speakerVoices: newSpeakerVoices,
+                speakerGenders: newSpeakerGenders
+              };
+
+              const updatedBook = { ...book, dramatization: updatedDramatization };
+              setBook(updatedBook);
+              db.saveBook(updatedBook);
+              updateBook(book.id, { dramatization: updatedDramatization });
+              console.log(`[Reader] Background dramatization for page ${nextPage} complete.`);
+            }
+          })
+          .catch(err => console.warn(`[Reader] Background dramatization for page ${nextPage} failed:`, err));
+      }
+    }
+  }, [currentPage, isPlaying, currentSentenceIndex, book?.dramatization, book?.isDramatizedReadingEnabled, apiKey]);
+
   useEffect(() => {
     if (id) {
       loadBook(id);
@@ -188,6 +288,7 @@ export default function BookReader() {
     audioRef.current = audio;
     
     const handleEnded = () => {
+      console.log("[TTS] Audio ended");
       if (audioQueueRef.current.length > 0) {
         const next = audioQueueRef.current.shift()!;
         audio.src = next.url;
@@ -198,10 +299,27 @@ export default function BookReader() {
             if (!isPlayingRef.current || !audioRef.current) return;
             const currentTime = audioRef.current.currentTime;
             
-            const activeTiming = next.timings.find(t => currentTime >= t.start && currentTime <= t.end);
-            if (activeTiming && currentSegmentIndexRef.current !== activeTiming.segmentIdx) {
-              setCurrentSegmentIndex(activeTiming.segmentIdx);
-              currentSegmentIndexRef.current = activeTiming.segmentIdx;
+            if (next.timings && next.timings.length > 0) {
+              const activeTiming = next.timings.find(t => currentTime >= t.start && currentTime <= t.end);
+              if (activeTiming && currentSegmentIndexRef.current !== activeTiming.segmentIdx) {
+                setCurrentSegmentIndex(activeTiming.segmentIdx);
+                currentSegmentIndexRef.current = activeTiming.segmentIdx;
+              }
+            } else if (next.sentenceRanges && next.sentenceRanges.length > 0) {
+              // Non-dramatized Gemini TTS highlight
+              const duration = audioRef.current.duration;
+              if (duration && !isNaN(duration) && duration !== Infinity) {
+                const progress = Math.min(0.999, currentTime / duration);
+                const targetChar = progress * (next.textLength || 0);
+                let activeLocalIdx = next.sentenceRanges.findIndex(r => targetChar >= r.start && targetChar <= r.end);
+                if (activeLocalIdx !== -1) {
+                  const activeGlobalIdx = (next.startIndex || 0) + activeLocalIdx;
+                  if (currentSentenceIndexRef.current !== activeGlobalIdx) {
+                    setCurrentSentenceIndex(activeGlobalIdx);
+                    currentSentenceIndexRef.current = activeGlobalIdx;
+                  }
+                }
+              }
             }
             animationFrameRef.current = requestAnimationFrame(updateDramatizedHighlight);
           };
@@ -209,25 +327,13 @@ export default function BookReader() {
         };
 
         audio.play().catch(e => console.error("Queue play failed", e));
+      } else if (isGeneratingChunksRef.current) {
+        console.log("[TTS] Queue empty but still generating chunks...");
+        isPlayingQueueRef.current = false;
       } else {
         isPlayingQueueRef.current = false;
         if (!isPlayingRef.current) return;
-        
-        if (settingsRef.current.autoTurnPage && currentPageRef.current < pagesRef.current.length - 1) {
-          setIsTurningPage(true);
-          setTimeout(() => {
-            handleNextPage();
-            setTimeout(() => {
-              setIsTurningPage(false);
-              startTTS(0);
-            }, 600);
-          }, 400);
-        } else {
-          setIsPlaying(false);
-          setCurrentSentenceIndex(null);
-          setCurrentSegmentIndex(null);
-          highlightRangeRef.current = null;
-        }
+        handleEndOfPage();
       }
     };
     audio.addEventListener('ended', handleEnded);
@@ -414,11 +520,18 @@ export default function BookReader() {
     if (!book || !apiKey) return null;
     setIsDramatizing(true);
     try {
-      const cleanText = getCleanText(pages[currentPage]);
+      const current = currentPageRef.current;
+      const cleanText = getCleanText(pagesRef.current[current]);
 
       const existingVoices = book.dramatization?.speakerVoices || {};
       const existingGenders = book.dramatization?.speakerGenders || {};
-      const result = await analyzeSpeakers(cleanText, apiKey, existingVoices, book.language || 'English');
+      const result = await analyzeSpeakers(
+        cleanText, 
+        apiKey, 
+        existingVoices, 
+        book.language || 'English',
+        () => isPlayingRef.current
+      );
       
       if (result && result.segments) {
         const newSpeakerVoices = { ...existingVoices, ...(result.newSpeakerVoices || {}) };
@@ -616,42 +729,95 @@ export default function BookReader() {
     }
   };
 
-  const handleNextPage = () => {
-    if (currentPage < pages.length - 1) {
-      const next = currentPage + 1;
+  const handleNextPage = (keepPlaying = false) => {
+    const current = currentPageRef.current;
+    if (current < pagesRef.current.length - 1) {
+      const next = current + 1;
+      console.log(`[Reader] Moving to next page: ${next}`);
       setCurrentPage(next);
+      currentPageRef.current = next; // Update ref immediately
       setCurrentSegmentIndex(null);
       currentSegmentIndexRef.current = null;
-      if (isPlayingRef.current) {
+      
+      if (isPlayingRef.current || keepPlaying) {
         saveProgress(next, 0);
         setCurrentSentenceIndex(0);
+        currentSentenceIndexRef.current = 0;
       } else {
         saveProgress(next, null);
         setCurrentSentenceIndex(null);
+        currentSentenceIndexRef.current = null;
       }
-      if (isPlaying) stopTTS();
+      
+      if (isPlaying && !keepPlaying) stopTTS();
+      else if (isPlaying && keepPlaying) {
+        // If we keep playing, we still need to stop current audio/synth
+        if (synthRef.current) synthRef.current.cancel();
+        if (audioRef.current) {
+          audioRef.current.pause();
+          audioRef.current.src = '';
+        }
+      }
     }
   };
 
   const handlePrevPage = () => {
-    if (currentPage > 0) {
-      const next = currentPage - 1;
+    const current = currentPageRef.current;
+    if (current > 0) {
+      const next = current - 1;
+      console.log(`[Reader] Moving to prev page: ${next}`);
       setCurrentPage(next);
+      currentPageRef.current = next; // Update ref immediately
       setCurrentSegmentIndex(null);
       currentSegmentIndexRef.current = null;
+      
       if (isPlayingRef.current) {
         saveProgress(next, 0);
         setCurrentSentenceIndex(0);
+        currentSentenceIndexRef.current = 0;
       } else {
         saveProgress(next, null);
         setCurrentSentenceIndex(null);
+        currentSentenceIndexRef.current = null;
       }
+      
       if (isPlaying) stopTTS();
     }
   };
 
+  const handleEndOfPage = () => {
+    const shouldContinue = isPlayingRef.current && settingsRef.current.autoTurnPage;
+    console.log(`[TTS] End of page reached. Should continue: ${shouldContinue}`);
+    
+    if (isTurningPageRef.current) {
+      console.log("[TTS] Already turning page, skipping handleEndOfPage");
+      return;
+    }
+
+    if (shouldContinue && currentPageRef.current < pagesRef.current.length - 1) {
+      setIsTurningPage(true);
+      isTurningPageRef.current = true;
+      setTimeout(() => {
+        handleNextPage(true);
+        setTimeout(() => {
+          setIsTurningPage(false);
+          isTurningPageRef.current = false;
+          if (isPlayingRef.current) {
+            console.log("[TTS] Continuing playback on next page");
+            startTTS(0);
+          }
+        }, 600);
+      }, 400);
+    } else {
+      console.log("[TTS] Stopping at end of page");
+      setIsPlaying(false);
+      isPlayingRef.current = false;
+      stopTTS();
+    }
+  };
+
   const toggleTTS = () => {
-    const effectiveTtsProvider = book?.ttsProvider || settings.ttsProvider;
+    const effectiveTtsProvider = book?.ttsProvider || 'browser';
     if (isPlaying || isTtsLoading) {
       if (effectiveTtsProvider === 'gemini' && audioRef.current) {
         audioRef.current.pause();
@@ -685,7 +851,7 @@ export default function BookReader() {
 
   // Fetch translations for the whole page when page changes or subtitles are enabled
   useEffect(() => {
-    if (!settings.isSubtitleTranslationEnabled || !apiKey) {
+    if (!effectiveIsSubtitleTranslationEnabled || !apiKey) {
       setPageTranslations([]);
       setBatchTranslationStatus('idle');
       return;
@@ -705,7 +871,7 @@ export default function BookReader() {
     if (sentences.length === 0) return;
 
     // Check if we already have stored subtitles for this page and language
-    const storedSubtitles = book?.subtitles?.[settings.subtitleLanguage];
+    const storedSubtitles = book?.subtitles?.[effectiveSubtitleLanguage];
     if (storedSubtitles && storedSubtitles.pages[currentPage]) {
       const pageStoredSubtitles = storedSubtitles.pages[currentPage];
       if (Array.isArray(pageStoredSubtitles) && pageStoredSubtitles.length === sentences.length) {
@@ -718,14 +884,14 @@ export default function BookReader() {
 
     setIsTranslatingSubtitle(true);
     setBatchTranslationStatus('loading');
-    translateSentencesBatch(sentences, settings.subtitleLanguage, apiKey)
+    translateSentencesBatch(sentences, effectiveSubtitleLanguage, apiKey)
       .then(({ translations, wordMap }) => {
         setPageTranslations(translations);
         setBatchTranslationStatus(translations.length === sentences.length ? 'success' : 'error');
         
         // Cache words if we got them
         if (wordMap && book) {
-          const targetLang = settings.subtitleLanguage;
+          const targetLang = effectiveSubtitleLanguage;
           const updatedSubtitles = { ...(book.subtitles || {}) };
           if (!updatedSubtitles[targetLang]) {
             updatedSubtitles[targetLang] = { pages: {}, lastUpdated: Date.now(), wordTranslations: {} };
@@ -754,11 +920,11 @@ export default function BookReader() {
       .finally(() => {
         setIsTranslatingSubtitle(false);
       });
-  }, [currentPage, settings.isSubtitleTranslationEnabled, apiKey, settings.subtitleLanguage, pages]);
+  }, [currentPage, effectiveIsSubtitleTranslationEnabled, apiKey, effectiveSubtitleLanguage, pages]);
 
   // Update current subtitle based on sentence index or segment index
   useEffect(() => {
-    if (!settings.isSubtitleTranslationEnabled || !isPlaying) {
+    if (!effectiveIsSubtitleTranslationEnabled || !isPlaying) {
       setCurrentSubtitle('');
       return;
     }
@@ -800,7 +966,7 @@ export default function BookReader() {
     }
 
     // Check for stored subtitles first
-    const storedSubtitles = book?.subtitles?.[settings.subtitleLanguage];
+    const storedSubtitles = book?.subtitles?.[effectiveSubtitleLanguage];
     if (storedSubtitles && storedSubtitles.pages[currentPage]) {
       const pageStoredSubtitles = storedSubtitles.pages[currentPage];
       if (Array.isArray(pageStoredSubtitles)) {
@@ -816,7 +982,7 @@ export default function BookReader() {
     } else if (batchTranslationStatus === 'error') {
       if (apiKey) {
         setIsTranslatingSubtitle(true);
-        translateText(currentSentence, settings.subtitleLanguage, apiKey)
+        translateText(currentSentence, effectiveSubtitleLanguage, apiKey)
           .then(trans => {
             if (isPlayingRef.current) setCurrentSubtitle(trans);
           })
@@ -832,17 +998,23 @@ export default function BookReader() {
     } else {
       setCurrentSubtitle(currentSentence);
     }
-  }, [currentSentenceIndex, currentSegmentIndex, isPlaying, settings.isSubtitleTranslationEnabled, pageTranslations, batchTranslationStatus, currentPage, pages, apiKey, settings.subtitleLanguage, book?.subtitles]);
+  }, [currentSentenceIndex, currentSegmentIndex, isPlaying, effectiveIsSubtitleTranslationEnabled, pageTranslations, batchTranslationStatus, currentPage, pages, apiKey, effectiveSubtitleLanguage, book?.subtitles]);
 
   const startTTS = async (startIndex = 0) => {
-    if (!pagesRef.current[currentPageRef.current]) return;
+    console.log(`[TTS] Starting playback on page ${currentPageRef.current} from index ${startIndex}`);
+    if (!pagesRef.current[currentPageRef.current]) {
+      console.warn("[TTS] No page content found for current page");
+      return;
+    }
     
     // Reset indices when starting new playback
-    setCurrentSentenceIndex(null);
+    setCurrentSentenceIndex(startIndex);
+    currentSentenceIndexRef.current = startIndex;
     setCurrentSegmentIndex(null);
+    currentSegmentIndexRef.current = null;
     setHighlightRange(null);
 
-    const effectiveTtsProvider = bookRef.current?.ttsProvider || settingsRef.current.ttsProvider;
+    const effectiveTtsProvider = bookRef.current?.ttsProvider || 'browser';
 
     if (effectiveTtsProvider === 'browser' && synthRef.current) {
       synthRef.current.cancel();
@@ -852,7 +1024,8 @@ export default function BookReader() {
     }
     
     // Clean up markers for reading
-    const cleanText = getCleanText(pagesRef.current[currentPageRef.current]);
+    const current = currentPageRef.current;
+    const cleanText = getCleanText(pagesRef.current[current]);
 
     const sentences = getSentences(cleanText);
 
@@ -861,7 +1034,10 @@ export default function BookReader() {
     isPlayingRef.current = true;
 
     if (effectiveTtsProvider === 'gemini') {
-      if (!apiKeyRef.current) {
+      const user = useStore.getState().user;
+      const hasApiKey = apiKeyRef.current || (user?.isApiKeyManaged && user.managedApiKey);
+      
+      if (!hasApiKey) {
         setErrorMessage('Gemini API Key is required for high-quality TTS. Falling back to browser TTS.');
         setIsTtsLoading(false);
         playWithBrowserTTS(sentences, startIndex);
@@ -869,13 +1045,27 @@ export default function BookReader() {
       }
 
       if (bookRef.current?.isDramatizedReadingEnabled) {
-        if (book?.dramatization?.pages[currentPage]) {
-          playWithDramatizedTTS(currentPage, startIndex);
+        if (book?.dramatization?.pages[current]) {
+          playWithDramatizedTTS(current, startIndex);
         } else {
           // Automatic dramatization
+          console.log("[TTS] Page not dramatized, analyzing now...");
           handleDramatizePage().then((updatedBook) => {
             if (updatedBook && isPlayingRef.current) {
-              playWithDramatizedTTS(currentPage, startIndex, updatedBook);
+              playWithDramatizedTTS(currentPageRef.current, startIndex, updatedBook);
+            } else if (isPlayingRef.current) {
+              console.log("[TTS] Dramatization failed, falling back to Gemini TTS");
+              playWithGeminiTTS(sentences, startIndex);
+            } else {
+              console.log("[TTS] Playback stopped during dramatization");
+              setIsTtsLoading(false);
+            }
+          }).catch(err => {
+            console.error("[TTS] Dramatization error in startTTS", err);
+            if (isPlayingRef.current) {
+              playWithGeminiTTS(sentences, startIndex);
+            } else {
+              setIsTtsLoading(false);
             }
           });
         }
@@ -910,6 +1100,7 @@ export default function BookReader() {
     }
 
     setIsTtsLoading(true);
+    isGeneratingChunksRef.current = true;
     try {
       let firstChunkStarted = false;
 
@@ -944,16 +1135,32 @@ export default function BookReader() {
               audioRef.current.play().catch(e => console.error("Initial play failed", e));
               isPlayingQueueRef.current = true;
             }
-          } else {
+          } else if (isPlayingRef.current) {
             audioQueueRef.current.push({ url, timings: chunkTimings });
+            // If playback stalled while waiting for chunks, restart it
+            if (!isPlayingQueueRef.current && firstChunkStarted && audioRef.current) {
+              const next = audioQueueRef.current.shift()!;
+              audioRef.current.src = next.url;
+              audioRef.current.playbackRate = settingsRef.current.ttsSpeed;
+              audioRef.current.play().catch(e => console.error("Restart play failed", e));
+              isPlayingQueueRef.current = true;
+            }
           }
-        }
+        },
+        () => isPlayingRef.current
       );
+      
+      // Safety: clear loading if we finished the whole process but never started playing
+      if (!firstChunkStarted) {
+        setIsTtsLoading(false);
+      }
       
     } catch (err) {
       console.error("Dramatized TTS failed", err);
       setIsTtsLoading(false);
       setErrorMessage("Failed to generate dramatized speech.");
+    } finally {
+      isGeneratingChunksRef.current = false;
     }
   };
 
@@ -971,16 +1178,23 @@ export default function BookReader() {
     );
     if (currentChunkIdx === -1) currentChunkIdx = 0;
 
-    let nextAudioBase64: string | null = null;
     let isRateLimited = false;
     let localStartIdx = startGlobalIdx > chunks[currentChunkIdx].startIndex ? startGlobalIdx - chunks[currentChunkIdx].startIndex : 0;
+
+    // Clear existing queue
+    audioQueueRef.current = [];
+    isPlayingQueueRef.current = false;
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = '';
+    }
 
     const fetchAudio = async (chunkIdx: number) => {
       if (chunkIdx >= chunks.length || isRateLimited) return null;
       try {
-        const effectiveGeminiVoice = bookRef.current?.geminiVoice || settingsRef.current.geminiVoice;
+        const effectiveGeminiVoice = bookRef.current?.geminiVoice || 'Kore';
         const bookVoice = bookRef.current?.dramatization?.speakerVoices?.['Narrator'] || effectiveGeminiVoice;
-        return await generateSpeech(chunks[chunkIdx].text, bookVoice, apiKeyRef.current);
+        return await generateSpeech(chunks[chunkIdx].text, bookVoice, apiKeyRef.current, () => isPlayingRef.current);
       } catch (e: any) {
         console.error("Failed to fetch audio", e);
         const errStr = e ? (e.message || e.toString() || JSON.stringify(e)) : '';
@@ -995,51 +1209,21 @@ export default function BookReader() {
       }
     };
 
-    const playNextChunk = async () => {
-      if (!isPlayingRef.current) return;
+    setIsTtsLoading(true);
+    isGeneratingChunksRef.current = true;
+    
+    try {
+      let firstChunkStarted = false;
       
-      if (currentChunkIdx >= chunks.length) {
-        setCurrentSubtitle('');
-        setCurrentSentenceIndex(null);
-        if (settingsRef.current.autoTurnPage && currentPageRef.current < pagesRef.current.length - 1) {
-          setIsTurningPage(true);
-          setTimeout(() => {
-            handleNextPage();
-            setTimeout(() => {
-              setIsTurningPage(false);
-              startTTS(0);
-            }, 600);
-          }, 400);
-        } else {
-          setIsPlaying(false);
-        }
-        return;
-      }
-
-      const chunk = chunks[currentChunkIdx];
-      let base64Audio = nextAudioBase64;
-      
-      if (!base64Audio) {
-        setIsTtsLoading(true);
-        base64Audio = await fetchAudio(currentChunkIdx);
-        setIsTtsLoading(false);
-      }
-
-      // Fetch next in background
-      nextAudioBase64 = null;
-      if (currentChunkIdx + 1 < chunks.length && !isRateLimited) {
-        fetchAudio(currentChunkIdx + 1).then(audio => {
-          nextAudioBase64 = audio;
-        });
-      }
-
-      if (!isPlayingRef.current) return;
-
-      if (base64Audio && audioRef.current) {
-        const wavUrl = pcmBase64ToWavBase64(base64Audio, 24000);
-        audioRef.current.src = wavUrl;
-        audioRef.current.playbackRate = settingsRef.current.ttsSpeed;
-
+      for (let i = currentChunkIdx; i < chunks.length; i++) {
+        if (!isPlayingRef.current || isRateLimited) break;
+        
+        const base64 = await fetchAudio(i);
+        if (!base64 || !isPlayingRef.current) break;
+        
+        const url = pcmBase64ToWavBase64(base64, 24000);
+        const chunk = chunks[i];
+        
         let searchIdx = 0;
         const sentenceRanges = chunk.sentences.map(s => {
           const start = chunk.text.indexOf(s, searchIdx);
@@ -1048,83 +1232,58 @@ export default function BookReader() {
           return { start, end };
         });
 
-        audioRef.current.onplay = () => {
-          const updateHighlight = () => {
-            if (!isPlayingRef.current || !audioRef.current) return;
-            const duration = audioRef.current.duration;
+        const queueItem = { 
+          url, 
+          timings: [], 
+          sentenceRanges, 
+          startIndex: chunk.startIndex, 
+          textLength: chunk.text.length 
+        };
+
+        if (!firstChunkStarted) {
+          firstChunkStarted = true;
+          setIsTtsLoading(false);
+          if (audioRef.current) {
+            audioRef.current.src = url;
+            audioRef.current.playbackRate = settingsRef.current.ttsSpeed;
             
-            // If duration is not yet available, we can't calculate progress
-            if (duration && !isNaN(duration) && duration !== Infinity) {
-              const progress = Math.min(0.999, audioRef.current.currentTime / duration);
-              const targetChar = progress * chunk.text.length;
-              
-              let activeLocalIdx = sentenceRanges.findIndex(r => targetChar >= r.start && targetChar <= r.end);
-              if (activeLocalIdx === -1) {
-                 const closest = sentenceRanges.findIndex(r => targetChar < r.start);
-                 activeLocalIdx = closest > 0 ? closest - 1 : (closest === 0 ? 0 : chunk.sentences.length - 1);
-              }
-              
-              const activeGlobalIdx = chunk.startIndex + activeLocalIdx;
-              if (currentSentenceIndexRef.current !== activeGlobalIdx) {
-                setCurrentSentenceIndex(activeGlobalIdx);
-                currentSentenceIndexRef.current = activeGlobalIdx;
-                
-                if (activeGlobalIdx % 5 === 0) {
-                  saveProgress(currentPageRef.current, activeGlobalIdx);
+            // Handle local start offset for the very first chunk
+            if (i === currentChunkIdx && localStartIdx > 0) {
+              const startChar = sentenceRanges[localStartIdx].start;
+              const startProgress = startChar / chunk.text.length;
+              audioRef.current.onloadedmetadata = () => {
+                if (audioRef.current && !isNaN(audioRef.current.duration) && audioRef.current.duration !== Infinity) {
+                  audioRef.current.currentTime = startProgress * audioRef.current.duration;
+                  audioRef.current.play().catch(e => console.error(e));
                 }
-              }
-            } else if (audioRef.current.currentTime > 0) {
-              // Fallback if duration is Infinity: just stay at the first sentence or use a very rough estimate
-              if (currentSentenceIndexRef.current === null) {
-                setCurrentSentenceIndex(chunk.startIndex);
-                currentSentenceIndexRef.current = chunk.startIndex;
-              }
+              };
+            } else {
+              audioRef.current.play().catch(e => console.error(e));
             }
-            animationFrameRef.current = requestAnimationFrame(updateHighlight);
-          };
-          animationFrameRef.current = requestAnimationFrame(updateHighlight);
-        };
-
-        audioRef.current.onpause = () => {
-          if (animationFrameRef.current) {
-            cancelAnimationFrame(animationFrameRef.current);
+            isPlayingQueueRef.current = true;
           }
-        };
-
-        audioRef.current.onended = () => {
-          if (animationFrameRef.current) {
-            cancelAnimationFrame(animationFrameRef.current);
+        } else if (isPlayingRef.current) {
+          audioQueueRef.current.push(queueItem);
+          // If playback stalled while waiting for chunks, restart it
+          if (!isPlayingQueueRef.current && audioRef.current) {
+            const next = audioQueueRef.current.shift()!;
+            audioRef.current.src = next.url;
+            audioRef.current.playbackRate = settingsRef.current.ttsSpeed;
+            audioRef.current.play().catch(e => console.error("Restart play failed", e));
+            isPlayingQueueRef.current = true;
           }
-          if (!isPlayingRef.current) return;
-          currentChunkIdx++;
-          localStartIdx = 0; 
-          
-          if (currentChunkIdx >= chunks.length) {
-             setCurrentSentenceIndex(null);
-          }
-          
-          playNextChunk();
-        };
-
-        if (localStartIdx > 0) {
-           const startChar = sentenceRanges[localStartIdx].start;
-           const startProgress = startChar / chunk.text.length;
-           audioRef.current.onloadedmetadata = () => {
-              if (audioRef.current && !isNaN(audioRef.current.duration) && audioRef.current.duration !== Infinity) {
-                audioRef.current.currentTime = startProgress * audioRef.current.duration;
-                audioRef.current.play().catch(e => console.error(e));
-              }
-           };
-        } else {
-           audioRef.current.play().catch(e => console.error(e));
         }
-      } else {
-        // Fallback to browser TTS for the rest of the page
-        playWithBrowserTTS(sentences, chunk.startIndex + localStartIdx);
       }
-    };
-
-    playNextChunk();
+      
+      if (!firstChunkStarted) setIsTtsLoading(false);
+      if (isRateLimited) playWithBrowserTTS(sentences, startGlobalIdx);
+      
+    } catch (err) {
+      console.error("Gemini TTS playback failed", err);
+      setIsTtsLoading(false);
+    } finally {
+      isGeneratingChunksRef.current = false;
+    }
   };
 
   const playWithBrowserTTS = (sentences: string[], startIdx: number) => {
@@ -1135,20 +1294,7 @@ export default function BookReader() {
       if (!isPlayingRef.current) return;
       
       if (currentIdx >= sentences.length) {
-        if (settingsRef.current.autoTurnPage && currentPageRef.current < pagesRef.current.length - 1) {
-          setIsTurningPage(true);
-          setTimeout(() => {
-            handleNextPage();
-            setTimeout(() => {
-              setIsTurningPage(false);
-              startTTS(0);
-            }, 600);
-          }, 400);
-        } else {
-          setIsPlaying(false);
-          setCurrentSubtitle('');
-          setCurrentSentenceIndex(null);
-        }
+        handleEndOfPage();
         return;
       }
 
@@ -1200,22 +1346,9 @@ export default function BookReader() {
         if (!isPlayingRef.current) return;
         currentIdx++;
         if (currentIdx >= sentences.length) {
-            if (settingsRef.current.autoTurnPage && currentPageRef.current < pagesRef.current.length - 1) {
-                setIsTurningPage(true);
-                setTimeout(() => {
-                  handleNextPage();
-                  setTimeout(() => {
-                    setIsTurningPage(false);
-                    startTTS(0);
-                  }, 600);
-                }, 400);
-            } else {
-                setIsPlaying(false);
-                setCurrentSubtitle('');
-                setCurrentSentenceIndex(null);
-            }
+          handleEndOfPage();
         } else {
-            playNext();
+          playNext();
         }
       };
 
@@ -1227,6 +1360,7 @@ export default function BookReader() {
   };
 
   const stopTTS = () => {
+    console.log("[TTS] Stopping playback");
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
     }
@@ -1243,6 +1377,9 @@ export default function BookReader() {
     setCurrentSubtitle('');
     setCurrentSegmentIndex(null);
     currentSegmentIndexRef.current = null;
+    audioQueueRef.current = [];
+    isPlayingQueueRef.current = false;
+    isGeneratingChunksRef.current = false;
     
     // Save current progress before stopping
     saveProgress(currentPageRef.current, currentSentenceIndex);
@@ -1264,7 +1401,7 @@ export default function BookReader() {
     }
 
     // 2. Check Stored Word Translations (Cache)
-    const targetLang = settings.subtitleLanguage;
+    const targetLang = effectiveSubtitleLanguage;
     const storedTranslation = book?.subtitles?.[targetLang]?.wordTranslations?.[cleanWord.toLowerCase()];
     if (storedTranslation) {
       setAiResult({ type: 'trans', content: storedTranslation });
@@ -1282,7 +1419,7 @@ export default function BookReader() {
       const sentences = getSentences(getCleanText(fullText));
       const sentenceWithWord = sentences.find(s => s.includes(cleanWord));
       
-      if (sentenceWithWord && settings.isSubtitleTranslationEnabled) {
+      if (sentenceWithWord && effectiveIsSubtitleTranslationEnabled) {
         // Check if we have a translation for this sentence in subtitles
         const sentenceIdx = sentences.indexOf(sentenceWithWord);
         const bookSubtitles = book?.subtitles?.[targetLang]?.pages[currentPage];
@@ -1355,7 +1492,7 @@ export default function BookReader() {
         const def = await getDefinition(text, context, apiKey);
         setAiResult({ type, content: def });
       } else {
-        const trans = await translateText(text, settings.subtitleLanguage, apiKey);
+        const trans = await translateText(text, effectiveSubtitleLanguage, apiKey);
         setAiResult({ type, content: trans });
       }
     } catch (err) {
@@ -1416,7 +1553,7 @@ export default function BookReader() {
         speaker = 'Global';
         const effectiveGeminiVoice = book?.geminiVoice || settings.geminiVoice;
         const activeVoice = book?.dramatization?.speakerVoices?.['Narrator'] || effectiveGeminiVoice;
-        if ((book?.ttsProvider || settings.ttsProvider) === 'gemini') {
+        if ((book?.ttsProvider || 'browser') === 'gemini') {
           gender = getGeminiVoiceGender(activeVoice);
         } else {
           // For browser voices, we could try to detect gender from name, but neutral is safer fallback
@@ -1643,6 +1780,20 @@ export default function BookReader() {
         </div>
       )}
 
+      {isTtsSlow && !isWaitingForQuota && !isDramatizing && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 p-3 bg-blue-50 text-blue-800 rounded-xl border border-blue-200 flex items-center gap-3 shadow-lg animate-in fade-in slide-in-from-top-2">
+          <Loader2 size={18} className="animate-spin text-blue-600" />
+          <span className="text-sm font-medium">AI is generating speech... this may take a moment.</span>
+        </div>
+      )}
+
+      {isDramatizing && !isWaitingForQuota && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 p-3 bg-purple-50 text-purple-800 rounded-xl border border-purple-200 flex items-center gap-3 shadow-lg animate-in fade-in slide-in-from-top-2">
+          <Loader2 size={18} className="animate-spin text-purple-600" />
+          <span className="text-sm font-medium">AI is analyzing characters and voices...</span>
+        </div>
+      )}
+
       {errorMessage && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 p-4 bg-red-50 text-red-700 rounded-xl border border-red-200 flex justify-between items-center shadow-lg min-w-[300px]">
           <span>{errorMessage}</span>
@@ -1658,23 +1809,23 @@ export default function BookReader() {
           "flex items-center justify-between p-4 border-b shrink-0",
           settings.theme === 'dark' ? "bg-zinc-900 border-zinc-800" : "bg-white border-zinc-200"
         )}>
-          <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={() => navigate('/')} className={settings.theme === 'dark' ? "text-zinc-300 hover:text-white" : ""}>
+          <div className="flex items-center gap-2 md:gap-4">
+            <Button variant="ghost" size="icon" onClick={() => navigate('/')} className={cn("h-8 w-8 md:h-10 md:w-10", settings.theme === 'dark' ? "text-zinc-300 hover:text-white" : "")}>
               <ChevronLeft size={20} />
             </Button>
-            <div>
-              <h1 className={cn("font-semibold leading-tight", settings.theme === 'dark' ? "text-zinc-100" : "text-zinc-900")}>{book.title}</h1>
-              <p className={cn("text-xs", settings.theme === 'dark' ? "text-zinc-400" : "text-zinc-500")}>{book.author}</p>
+            <div className="min-w-0">
+              <h1 className={cn("font-semibold leading-tight text-sm md:text-base truncate", settings.theme === 'dark' ? "text-zinc-100" : "text-zinc-900")}>{book.title}</h1>
+              <p className={cn("text-[10px] md:text-xs truncate", settings.theme === 'dark' ? "text-zinc-400" : "text-zinc-500")}>{book.author}</p>
             </div>
           </div>
-          <div className="flex items-center gap-1 md:gap-2">
+          <div className="flex items-center gap-0.5 md:gap-2">
             <Button 
               variant="ghost" 
               size="icon" 
               onClick={handleDramatizePage} 
               disabled={isDramatizing || isDramatizingFullBook}
               title="Dramatize Page (AI Voices)"
-              className="h-9 w-9"
+              className="h-8 w-8 md:h-9 md:w-9"
             >
               <Captions size={18} className={cn(
                 book.dramatization?.pages[currentPage] ? "text-emerald-500" : "text-zinc-400",
@@ -1687,7 +1838,7 @@ export default function BookReader() {
               onClick={() => setShowDramatizeConfirm(true)} 
               disabled={isDramatizing || isDramatizingFullBook}
               title="Dramatize Full Book (AI Analysis)"
-              className="h-9 w-9"
+              className="h-8 w-8 md:h-9 md:w-9"
             >
               <Sparkles size={18} className={cn(
                 book.dramatization?.pages && Object.keys(book.dramatization.pages).length === pages.length ? "text-emerald-500" : "text-zinc-400",
@@ -1700,7 +1851,7 @@ export default function BookReader() {
                 variant="ghost" 
                 size="icon" 
                 onClick={() => setShowMoreMenu(!showMoreMenu)}
-                className="h-9 w-9"
+                className="h-8 w-8 md:h-9 md:w-9"
               >
                 <MoreVertical size={18} className="text-zinc-400" />
               </Button>
@@ -1742,54 +1893,6 @@ export default function BookReader() {
                       <MessageSquare size={16} className={showQuotes ? "text-blue-500" : "text-zinc-400"} />
                       <span>Quotes</span>
                     </button>
-                    <div className={cn("h-px my-1", settings.theme === 'dark' ? "bg-zinc-700" : "bg-zinc-100")} />
-                    <div className="px-4 py-2">
-                      <label className={cn("block text-[10px] font-bold uppercase tracking-wider mb-1", settings.theme === 'dark' ? "text-zinc-500" : "text-zinc-400")}>
-                        Character Voice {book?.isDramatizedReadingEnabled && "(Dramatization Active)"}
-                      </label>
-                      <div className={cn(book?.isDramatizedReadingEnabled ? "opacity-50" : "")}>
-                        {settings.ttsProvider === 'gemini' ? (
-                          <select
-                            disabled={!!book?.isDramatizedReadingEnabled}
-                            value={settings.geminiVoice}
-                            onChange={(e) => updateSettings({ geminiVoice: e.target.value as any })}
-                            className={cn(
-                              "w-full text-xs bg-transparent border rounded px-1 py-1 outline-none",
-                              settings.theme === 'dark' ? "border-zinc-700 text-zinc-300" : "border-zinc-200 text-zinc-700",
-                              book?.isDramatizedReadingEnabled && "cursor-not-allowed"
-                            )}
-                          >
-                            <option value="Puck">Puck (Male)</option>
-                            <option value="Charon">Charon (Male)</option>
-                            <option value="Kore">Kore (Female)</option>
-                            <option value="Fenrir">Fenrir (Male)</option>
-                            <option value="Zephyr">Zephyr (Female)</option>
-                            <option value="Aoede">Aoede (Female)</option>
-                            <option value="Orpheus">Orpheus (Male)</option>
-                            <option value="Cassiopeia">Cassiopeia (Female)</option>
-                          </select>
-                        ) : (
-                          <select
-                            disabled={!!book?.isDramatizedReadingEnabled}
-                            value={settings.ttsVoice || ''}
-                            onChange={(e) => updateSettings({ ttsVoice: e.target.value })}
-                            className={cn(
-                              "w-full text-xs bg-transparent border rounded px-1 py-1 outline-none",
-                              settings.theme === 'dark' ? "border-zinc-700 text-zinc-300" : "border-zinc-200 text-zinc-700",
-                              book?.isDramatizedReadingEnabled && "cursor-not-allowed"
-                            )}
-                          >
-                            <option value="">Default</option>
-                            {availableVoices
-                              .filter(v => book?.language === 'Hebrew' ? v.lang.startsWith('he') : true)
-                              .map(v => (
-                                <option key={v.name} value={v.name}>{v.name}</option>
-                              ))
-                            }
-                          </select>
-                        )}
-                      </div>
-                    </div>
                     <div className={cn("h-px my-1", settings.theme === 'dark' ? "bg-zinc-700" : "bg-zinc-100")} />
                     <button 
                       onClick={() => { updateSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' }); setShowMoreMenu(false); }}
@@ -1863,6 +1966,14 @@ export default function BookReader() {
               <div className="flex flex-col items-center gap-3 bg-white px-6 py-4 rounded-2xl shadow-lg border border-zinc-100">
                 <div className="w-8 h-8 border-4 border-zinc-200 border-t-zinc-900 rounded-full animate-spin" />
                 <span className="text-sm font-medium text-zinc-600">Turning page...</span>
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={() => setIsTurningPage(false)}
+                  className="mt-2 text-xs text-zinc-400 hover:text-zinc-600"
+                >
+                  Cancel
+                </Button>
               </div>
             </div>
           )}
@@ -2011,14 +2122,14 @@ export default function BookReader() {
           </div>
         )}
         {showSummary && (
-          <div className="w-80 bg-white border-l border-zinc-200 shadow-xl flex flex-col h-full z-20 shrink-0 animate-in slide-in-from-right-8">
+          <div className="fixed inset-y-0 right-0 w-full md:w-80 bg-white border-l border-zinc-200 shadow-xl flex flex-col h-full z-[60] animate-in slide-in-from-right-full md:slide-in-from-right-8">
             <div className="p-4 border-b border-zinc-200 flex items-center justify-between bg-zinc-50/50">
               <div className="flex items-center gap-2 text-zinc-900 font-medium">
                 <Sparkles size={18} className="text-purple-500" />
                 AI Summary
               </div>
-              <button onClick={() => setShowSummary(false)} className="text-zinc-400 hover:text-zinc-900 transition-colors">
-                <X size={18} />
+              <button onClick={() => setShowSummary(false)} className="text-zinc-400 hover:text-zinc-900 transition-colors p-2">
+                <X size={20} />
               </button>
             </div>
             <div className="p-6 overflow-y-auto flex-1">
@@ -2044,21 +2155,29 @@ export default function BookReader() {
                 <p className="font-semibold text-zinc-900">Preparing Dramatized Reading...</p>
                 <p className="text-sm text-zinc-500">AI is analyzing characters and assigning voices.</p>
               </div>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => setIsDramatizing(false)}
+                className="mt-2"
+              >
+                Cancel
+              </Button>
             </div>
           </div>
         )}
 
         {/* Subtitles Overlay */}
         {isPlaying && currentSubtitle && (
-          <div className="fixed bottom-24 left-1/2 -translate-x-1/2 w-full max-w-3xl px-4 z-40 pointer-events-none">
-            <div className="bg-black/80 backdrop-blur-md text-white px-6 py-4 rounded-2xl text-center shadow-2xl border border-white/10 mx-auto w-full max-h-[30vh] overflow-y-auto pointer-events-auto">
+          <div className="fixed bottom-20 md:bottom-24 left-1/2 -translate-x-1/2 w-full max-w-3xl px-4 z-40 pointer-events-none">
+            <div className="bg-black/80 backdrop-blur-md text-white px-4 md:px-6 py-3 md:py-4 rounded-2xl text-center shadow-2xl border border-white/10 mx-auto w-full max-h-[30vh] overflow-y-auto pointer-events-auto">
               {isTranslatingSubtitle ? (
                 <div className="flex items-center justify-center gap-2 text-white/70 text-sm">
                   <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                   Translating...
                 </div>
               ) : (
-                <div className="text-lg md:text-xl font-medium leading-relaxed whitespace-pre-wrap" dir={book.textDirection || 'auto'} style={{ textShadow: '0 2px 4px rgba(0,0,0,0.5)' }}>
+                <div className="text-base md:text-xl font-medium leading-relaxed whitespace-pre-wrap" dir={book.textDirection || 'auto'} style={{ textShadow: '0 2px 4px rgba(0,0,0,0.5)' }}>
                   {currentSubtitle}
                 </div>
               )}
@@ -2079,20 +2198,20 @@ export default function BookReader() {
 
         {/* AI Modal Overlay */}
         {aiResult.type && (
-          <div className="fixed top-20 right-4 md:right-8 w-80 bg-white rounded-2xl shadow-xl border border-zinc-200 p-5 z-50 animate-in fade-in slide-in-from-top-4">
+          <div className="fixed top-20 right-4 md:right-8 w-[calc(100%-2rem)] md:w-80 bg-white rounded-2xl shadow-xl border border-zinc-200 p-5 z-50 animate-in fade-in slide-in-from-top-4">
             <div className="flex justify-between items-start mb-3">
               <div className="flex items-center gap-2 text-zinc-900 font-medium">
                 {aiResult.type === 'def' ? <Search size={16} className="text-blue-500" /> : <Languages size={16} className="text-emerald-500" />}
                 {aiResult.type === 'def' ? 'Definition' : 'Translation'}
               </div>
-              <button onClick={() => setAiResult({ type: null, content: '' })} className="text-zinc-400 hover:text-zinc-900">
-                <X size={16} />
+              <button onClick={() => setAiResult({ type: null, content: '' })} className="text-zinc-400 hover:text-zinc-900 p-1">
+                <X size={18} />
               </button>
             </div>
-            <div className="text-sm font-medium text-zinc-700 mb-2 border-l-2 border-zinc-200 pl-2">
+            <div className="text-sm font-medium text-zinc-700 mb-2 border-l-2 border-zinc-200 pl-2 italic">
               "{selectedText}"
             </div>
-            <div className="text-sm text-zinc-600 leading-relaxed">
+            <div className="text-sm text-zinc-600 leading-relaxed max-h-[40vh] overflow-y-auto">
               {isAiLoading ? (
                 <span className="flex items-center gap-2 text-zinc-400">
                   <div className="w-3 h-3 border-2 border-zinc-300 border-t-zinc-600 rounded-full animate-spin" />
@@ -2108,18 +2227,18 @@ export default function BookReader() {
 
       {/* Bottom Controls */}
       <div className={cn(
-        "fixed bottom-4 left-1/2 -translate-x-1/2 backdrop-blur-md border p-2 rounded-full shadow-lg transition-all duration-300 z-50 w-[95%] max-w-2xl",
+        "fixed bottom-4 left-1/2 -translate-x-1/2 backdrop-blur-md border p-1.5 md:p-2 rounded-full shadow-lg transition-all duration-300 z-50 w-[95%] max-w-2xl",
         isImmersive ? "translate-y-24 opacity-0 hover:opacity-100 hover:translate-y-0" : "",
         settings.theme === 'dark' ? "bg-zinc-900/90 border-zinc-800" : "bg-white/90 border-zinc-200/50"
       )}>
-        <div className="flex items-center justify-between gap-2 md:gap-4 px-2">
+        <div className="flex items-center justify-between gap-1 md:gap-4 px-1 md:px-2">
           
           {/* Progress */}
-          <div className="flex items-center gap-3 flex-1 min-w-0">
-            <span className={cn("text-[10px] md:text-xs font-medium w-10 text-right shrink-0", settings.theme === 'dark' ? "text-zinc-400" : "text-zinc-500")}>
+          <div className="flex items-center gap-2 md:gap-3 flex-1 min-w-0">
+            <span className={cn("text-[9px] md:text-xs font-medium w-8 md:w-10 text-right shrink-0", settings.theme === 'dark' ? "text-zinc-400" : "text-zinc-500")}>
               {currentPage + 1}/{pages.length}
             </span>
-            <div className={cn("flex-1 h-1 rounded-full overflow-hidden hidden sm:block", settings.theme === 'dark' ? "bg-zinc-800" : "bg-zinc-200/50")}>
+            <div className={cn("flex-1 h-1 rounded-full overflow-hidden hidden xs:block", settings.theme === 'dark' ? "bg-zinc-800" : "bg-zinc-200/50")}>
               <div 
                 className={cn("h-full rounded-full transition-all duration-300", settings.theme === 'dark' ? "bg-zinc-400" : "bg-zinc-900")}
                 style={{ width: `${((currentPage + 1) / pages.length) * 100}%` }}
@@ -2128,13 +2247,13 @@ export default function BookReader() {
           </div>
 
           {/* API Counter */}
-          <div className={cn("hidden md:flex items-center gap-1 text-[10px] font-medium px-2 py-1 rounded-md shrink-0 border", settings.theme === 'dark' ? "text-zinc-400 bg-zinc-800 border-zinc-700" : "text-zinc-500 bg-zinc-100 border-zinc-200/50")} title="Gemini API Calls">
+          <div className={cn("hidden sm:flex items-center gap-1 text-[10px] font-medium px-2 py-1 rounded-md shrink-0 border", settings.theme === 'dark' ? "text-zinc-400 bg-zinc-800 border-zinc-700" : "text-zinc-500 bg-zinc-100 border-zinc-200/50")} title="Gemini API Calls">
             <Zap size={10} className="text-yellow-500" />
             <span>{apiCallCount}</span>
           </div>
 
           {/* TTS Controls */}
-          <div className="flex items-center justify-center gap-1 shrink-0">
+          <div className="flex items-center justify-center gap-0.5 md:gap-1 shrink-0">
             <Button variant="ghost" size="icon" onClick={() => handleTextSelection('quote')} title="Save Quote" className={cn("hidden sm:inline-flex h-7 w-7 rounded-full", settings.theme === 'dark' ? "hover:bg-zinc-800 text-zinc-300" : "")}>
               <Highlighter size={14} />
             </Button>
@@ -2165,21 +2284,24 @@ export default function BookReader() {
               size="icon" 
               disabled={!isPlaying}
               onClick={() => {
-                const newValue = !settings.isSubtitleTranslationEnabled;
-                updateSettings({ isSubtitleTranslationEnabled: newValue });
-                db.saveSettings({ ...settings, isSubtitleTranslationEnabled: newValue });
+                if (!book) return;
+                const newValue = !effectiveIsSubtitleTranslationEnabled;
+                const updatedBook = { ...book, isSubtitleTranslationEnabled: newValue };
+                setBook(updatedBook);
+                updateBook(book.id, { isSubtitleTranslationEnabled: newValue });
+                db.saveBook(updatedBook);
               }} 
-              title={!isPlaying ? "Start playback to enable subtitles" : `Toggle ${settings.subtitleLanguage} Subtitles`} 
+              title={!isPlaying ? "Start playback to enable subtitles" : `Toggle ${effectiveSubtitleLanguage} Subtitles`} 
               className={cn(
                 "h-7 w-7 rounded-full transition-opacity", 
                 !isPlaying && "opacity-30 grayscale cursor-not-allowed",
-                settings.isSubtitleTranslationEnabled && isPlaying ? (settings.theme === 'dark' ? "text-blue-400 bg-blue-900/30" : "text-blue-500 bg-blue-50") : (settings.theme === 'dark' ? "hover:bg-zinc-800 text-zinc-300" : "")
+                effectiveIsSubtitleTranslationEnabled && isPlaying ? (settings.theme === 'dark' ? "text-blue-400 bg-blue-900/30" : "text-blue-500 bg-blue-50") : (settings.theme === 'dark' ? "hover:bg-zinc-800 text-zinc-300" : "")
               )}
             >
               <Captions size={14} />
             </Button>
             
-            <div className={cn("w-px h-4 mx-1", settings.theme === 'dark' ? "bg-zinc-700" : "bg-zinc-300")} />
+            <div className={cn("w-px h-4 mx-0.5 md:mx-1", settings.theme === 'dark' ? "bg-zinc-700" : "bg-zinc-300")} />
 
             <Button variant="ghost" size="icon" onClick={handlePrevPage} className={cn("h-7 w-7 rounded-full", settings.theme === 'dark' ? "hover:bg-zinc-800 text-zinc-300" : "")}>
               <SkipBack size={14} />
@@ -2187,10 +2309,10 @@ export default function BookReader() {
             <Button 
               variant="primary" 
               size="icon" 
-              className="rounded-full w-9 h-9 shadow-sm shrink-0"
+              className="rounded-full w-8 h-8 md:w-9 md:h-9 shadow-sm shrink-0"
               onClick={toggleTTS}
             >
-              {isTtsLoading ? (
+              {isTtsLoading || isDramatizing ? (
                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
               ) : isPlaying ? (
                 <Pause size={16} className="fill-current" />
@@ -2203,15 +2325,11 @@ export default function BookReader() {
             </Button>
           </div>
 
-          {/* Settings / Exit Immersive */}
+          {/* Exit Immersive */}
           <div className="flex-1 flex justify-end min-w-0">
-            {isImmersive ? (
+            {isImmersive && (
               <Button variant="outline" size="sm" onClick={() => setIsImmersive(false)} className={cn("text-[10px] h-7 px-2 rounded-full", settings.theme === 'dark' ? "border-zinc-700 text-zinc-300 hover:bg-zinc-800" : "")}>
                 Exit
-              </Button>
-            ) : (
-              <Button variant="ghost" size="icon" onClick={() => navigate('/settings')} className={cn("h-7 w-7 rounded-full", settings.theme === 'dark' ? "hover:bg-zinc-800 text-zinc-300" : "")}>
-                <SettingsIcon size={14} />
               </Button>
             )}
           </div>
