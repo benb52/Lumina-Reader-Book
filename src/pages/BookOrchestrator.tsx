@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Save, X, ChevronLeft, ChevronRight, Trash, Plus, Bold, Underline, Sparkles, Loader2, User, Volume2, Play, Check, Captions, Edit3, Type, Wand2 } from 'lucide-react';
+import { Save, X, ChevronLeft, ChevronRight, Trash, Plus, Bold, Underline, Sparkles, Loader2, User, Volume2, Play, Check, Captions, Edit3, Type, Wand2, BookOpen } from 'lucide-react';
 import { useStore, Book } from '../store/useStore';
 import { db } from '../lib/db';
 import { Button } from '../components/ui/Button';
@@ -54,6 +54,7 @@ export default function BookOrchestrator() {
 
   const advancedTextareaRef = useRef<HTMLTextAreaElement>(null);
 
+  const [isPagesSidebarOpen, setIsPagesSidebarOpen] = useState(false);
   const [isAdvancedEditorOpen, setIsAdvancedEditorOpen] = useState(false);
   const [showApplyConfirm, setShowApplyConfirm] = useState(false);
   const [fullText, setFullText] = useState('');
@@ -881,75 +882,119 @@ export default function BookOrchestrator() {
                 <p className="text-xs text-zinc-500">Edit full book content and structure</p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <div className="flex bg-zinc-100 rounded-lg p-1 mr-4 hidden md:flex items-center gap-1">
-                <Button variant="ghost" size="sm" onClick={() => handleFormatTextAdvanced('bold')} title="Bold (Selection)" className="h-8 w-8 p-0 hover:bg-white hover:shadow-sm">
-                  <Bold size={14} />
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => handleFormatTextAdvanced('underline')} title="Underline (Selection)" className="h-8 w-8 p-0 hover:bg-white hover:shadow-sm">
-                  <Underline size={14} />
-                </Button>
-                <div className="w-px h-4 bg-zinc-300 mx-1" />
-                <Button variant="ghost" size="sm" onClick={handleInsertPageBreak} title="Insert Page Break" className="h-8 px-2 text-[10px] font-bold uppercase tracking-tight hover:bg-white hover:shadow-sm">
-                  <Plus size={10} className="mr-1" /> Page Break
-                </Button>
-                <Button variant="ghost" size="sm" onClick={deleteCurrentPageAdvanced} title="Delete Current Page Chunk" className="h-8 px-2 text-[10px] font-bold uppercase tracking-tight text-red-500 hover:bg-white hover:shadow-sm">
-                  <Trash size={10} className="mr-1" /> Delete
-                </Button>
-              </div>
-
-              <div className="flex bg-zinc-100 rounded-lg p-1 mr-4 hidden md:flex">
-                <Button variant="ghost" size="sm" onClick={() => setEditorFontSize(prev => Math.max(12, prev - 2))} className="h-8 w-8 p-0">-</Button>
-                <div className="flex items-center justify-center w-12 text-xs font-bold text-zinc-500">{editorFontSize}px</div>
-                <Button variant="ghost" size="sm" onClick={() => setEditorFontSize(prev => Math.min(32, prev + 2))} className="h-8 w-8 p-0">+</Button>
-              </div>
-              <Button 
-                variant="outline"
-                size="sm"
-                onClick={() => rePaginate(2000)}
-                title="Automatically restructure the book into even pages (approx. 2000 characters per page)"
-                className="border-zinc-200 text-zinc-600 hover:bg-zinc-50 hidden sm:flex"
-              >
-                Auto-Paginate
-              </Button>
+            <div className="flex items-center gap-1 sm:gap-2">
               <Button 
                 variant="outline"
                 size="sm"
                 onClick={autoDetectChapters}
                 disabled={isAutoDetecting}
-                title="AI-assisted detection of chapter titles and automatic bold formatting"
-                className="border-amber-200 text-amber-700 hover:bg-amber-50"
+                title="AI-assisted detection of chapter titles"
+                className="border-amber-200 text-amber-700 hover:bg-amber-50 h-9 px-2 sm:px-3"
               >
                 {isAutoDetecting ? (
-                  <Loader2 size={14} className="animate-spin mr-2" />
+                  <Loader2 size={14} className="animate-spin sm:mr-2" />
                 ) : (
-                  <Wand2 size={14} className="mr-2" />
+                  <Wand2 size={14} className="sm:mr-2" />
                 )}
-                Auto-Detect Chapters
+                <span className="hidden sm:inline">Auto-Detect Chapters</span>
+                <span className="sm:hidden text-[10px] font-bold">Auto-Detect</span>
               </Button>
               <Button 
                 onClick={() => setShowApplyConfirm(true)}
-                title="Save and apply all changes to the book structure"
-                className="bg-zinc-900 text-white hover:bg-zinc-800"
+                title="Save and apply all changes"
+                className="bg-zinc-900 text-white hover:bg-zinc-800 h-9 px-2 sm:px-4"
               >
-                <Check size={16} className="mr-2" /> Apply Changes
+                <Check size={16} className="sm:mr-2" />
+                <span className="hidden sm:inline">Apply Changes</span>
+                <span className="sm:hidden text-[10px] font-bold">Apply</span>
               </Button>
             </div>
           </header>
 
+          {/* Dedicated Toolbar for Formatting & Tools */}
+          <div className="flex items-center justify-between px-4 py-2 bg-zinc-50 border-b border-zinc-200 overflow-x-auto no-scrollbar shrink-0">
+            <div className="flex items-center gap-1">
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={() => setIsPagesSidebarOpen(!isPagesSidebarOpen)}
+                className={cn(
+                  "h-8 px-2 text-[10px] font-bold uppercase tracking-tight md:hidden",
+                  isPagesSidebarOpen ? "bg-zinc-200 text-zinc-900" : "text-zinc-500"
+                )}
+              >
+                <BookOpen size={14} className="mr-1" /> Pages
+              </Button>
+              <div className="w-px h-4 bg-zinc-300 mx-1 md:hidden" />
+              
+              <div className="flex bg-white border border-zinc-200 rounded-lg p-0.5 shadow-sm">
+                <Button variant="ghost" size="sm" onClick={() => handleFormatTextAdvanced('bold')} title="Bold (Selection)" className="h-8 w-8 p-0 hover:bg-zinc-100">
+                  <Bold size={14} />
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => handleFormatTextAdvanced('underline')} title="Underline (Selection)" className="h-8 w-8 p-0 hover:bg-zinc-100">
+                  <Underline size={14} />
+                </Button>
+              </div>
+              <div className="w-px h-4 bg-zinc-300 mx-1" />
+              <div className="flex bg-white border border-zinc-200 rounded-lg p-0.5 shadow-sm">
+                <Button variant="ghost" size="sm" onClick={handleInsertPageBreak} title="Insert Page Break" className="h-8 px-2 text-[10px] font-bold uppercase tracking-tight hover:bg-zinc-100">
+                  <Plus size={10} className="mr-1" /> Page
+                </Button>
+                <Button variant="ghost" size="sm" onClick={deleteCurrentPageAdvanced} title="Delete Current Page Chunk" className="h-8 px-2 text-[10px] font-bold uppercase tracking-tight text-red-500 hover:bg-zinc-100">
+                  <Trash size={10} className="mr-1" /> Delete
+                </Button>
+              </div>
+              <div className="w-px h-4 bg-zinc-300 mx-1 hidden sm:block" />
+              <Button 
+                variant="ghost"
+                size="sm"
+                onClick={() => rePaginate(2000)}
+                className="h-8 px-2 text-[10px] font-bold uppercase tracking-tight text-zinc-600 hover:bg-zinc-100 hidden sm:flex"
+              >
+                Auto-Paginate
+              </Button>
+            </div>
+
+            <div className="flex items-center gap-2 ml-4">
+              <div className="flex bg-white border border-zinc-200 rounded-lg p-0.5 shadow-sm">
+                <Button variant="ghost" size="sm" onClick={() => setEditorFontSize(prev => Math.max(12, prev - 2))} className="h-8 w-8 p-0 hover:bg-zinc-100">-</Button>
+                <div className="flex items-center justify-center w-8 text-[10px] font-bold text-zinc-500">{editorFontSize}px</div>
+                <Button variant="ghost" size="sm" onClick={() => setEditorFontSize(prev => Math.min(32, prev + 2))} className="h-8 w-8 p-0 hover:bg-zinc-100">+</Button>
+              </div>
+            </div>
+          </div>
+
           <div className="flex-1 flex overflow-hidden relative">
             {/* Sidebar with page list */}
-            <div className="w-48 border-r border-zinc-200 bg-zinc-50 overflow-y-auto hidden md:block">
+            <div className={cn(
+              "w-48 border-r border-zinc-200 bg-zinc-50 overflow-y-auto transition-all duration-300 ease-in-out shrink-0",
+              "fixed inset-y-0 left-0 z-50 md:relative md:translate-x-0 pt-32 md:pt-0",
+              isPagesSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
+              !isPagesSidebarOpen && "hidden md:block"
+            )}>
               <div className="p-3">
-                <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-3">Pages</p>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Pages</p>
+                  <Button variant="ghost" size="icon" onClick={() => setIsPagesSidebarOpen(false)} className="md:hidden h-6 w-6">
+                    <X size={14} />
+                  </Button>
+                </div>
                 <div className="space-y-1">
                   {fullText.split('<<LUMINA_PAGE_BREAK>>').map((_, idx) => (
                     <button
                       key={idx}
-                      onClick={() => jumpToPageMarker(idx + 1)}
-                      className="w-full text-left px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-200 rounded-md transition-colors flex justify-between"
+                      onClick={() => {
+                        jumpToPageMarker(idx + 1);
+                        if (window.innerWidth < 768) setIsPagesSidebarOpen(false);
+                      }}
+                      className="w-full text-left px-3 py-2 text-xs font-medium text-zinc-600 hover:bg-zinc-200 rounded-md transition-colors flex justify-between items-center group/btn"
                     >
-                      <span>Page {idx + 1}</span>
+                      <span className="flex items-center gap-2">
+                        <div className="w-5 h-5 rounded bg-zinc-200 flex items-center justify-center text-[8px] text-zinc-500 group-hover/btn:bg-zinc-900 group-hover/btn:text-white transition-colors">
+                          {idx + 1}
+                        </div>
+                        Page {idx + 1}
+                      </span>
                       <Type size={10} className="text-zinc-400" />
                     </button>
                   ))}
@@ -957,13 +1002,20 @@ export default function BookOrchestrator() {
               </div>
             </div>
 
+            {isPagesSidebarOpen && (
+              <div 
+                className="fixed inset-0 bg-black/20 backdrop-blur-[1px] z-40 md:hidden"
+                onClick={() => setIsPagesSidebarOpen(false)}
+              />
+            )}
+
             <textarea
               ref={advancedTextareaRef}
               value={fullText}
               onChange={(e) => setFullText(e.target.value)}
               placeholder="Paste or edit the full book text here..."
               className={cn(
-                "flex-1 h-full p-8 md:p-12 leading-relaxed focus:outline-none resize-none bg-zinc-100/30 selection:bg-purple-100 custom-scrollbar",
+                "flex-1 h-full p-4 sm:p-8 md:p-12 pb-24 sm:pb-8 leading-relaxed focus:outline-none resize-none bg-zinc-100/30 selection:bg-purple-100 custom-scrollbar",
                 textDirection === 'rtl' ? 'text-right' : 'text-left'
               )}
               dir={textDirection}
