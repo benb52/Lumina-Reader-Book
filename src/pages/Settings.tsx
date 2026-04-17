@@ -1,7 +1,42 @@
 import React, { useState, useEffect } from 'react';
 import { useStore } from '../store/useStore';
 import { Button } from '../components/ui/Button';
-import { Save, Key, Volume2, Target, User as UserIcon, Eye, EyeOff, Lock, Shield } from 'lucide-react';
+import { Save, Key, Volume2, Target, User as UserIcon, Eye, EyeOff, Lock, Shield, Play, Loader2 } from 'lucide-react';
+import { GEMINI_VOICES, generateSpeech } from '../services/ai';
+
+// Helper to convert raw PCM base64 to WAV base64 so the browser can play it
+const pcmBase64ToWavBase64 = (base64Pcm: string, sampleRate: number = 24000): string => {
+  const binaryString = atob(base64Pcm);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+
+  const wavHeader = new ArrayBuffer(44);
+  const view = new DataView(wavHeader);
+  
+  view.setUint32(0, 0x52494646, false);
+  view.setUint32(4, 36 + len, true);
+  view.setUint32(8, 0x57415645, false);
+  view.setUint32(12, 0x666d7420, false);
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  view.setUint32(36, 0x64617461, false);
+  view.setUint32(40, len, true);
+
+  const combined = new Uint8Array(44 + len);
+  combined.set(new Uint8Array(wavHeader), 0);
+  combined.set(bytes, 44);
+  
+  const blob = new Blob([combined], { type: 'audio/wav' });
+  return URL.createObjectURL(blob);
+};
 import { db } from '../lib/db';
 import { auth } from '../lib/firebase';
 import { updatePassword } from 'firebase/auth';
@@ -19,6 +54,7 @@ export default function Settings() {
   const [isSaved, setIsSaved] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [previewingVoice, setPreviewingVoice] = useState<string | null>(null);
   
   useEffect(() => {
     const loadVoices = () => {
@@ -68,6 +104,26 @@ export default function Settings() {
       setIsSaved(false);
       navigate('/');
     }, 1000);
+  };
+
+  const handlePreviewGemini = async (voice: string) => {
+    if (!localSettings.apiKey) {
+      alert("Please provide an API key to preview Gemini voices.");
+      return;
+    }
+    setPreviewingVoice(voice);
+    try {
+      const sampleText = "Hello, this is a sample of the Gemini AI voice.";
+      const base64Audio = await generateSpeech(sampleText, voice, localSettings.apiKey);
+      const audioUrl = pcmBase64ToWavBase64(base64Audio);
+      const audio = new Audio(audioUrl);
+      audio.play();
+    } catch (err) {
+      console.error("Preview failed", err);
+      alert("Failed to preview voice.");
+    } finally {
+      setPreviewingVoice(null);
+    }
   };
 
   const handleChangePassword = async (e: React.FormEvent) => {
@@ -358,10 +414,60 @@ export default function Settings() {
               </select>
             </div>
 
-            {localSettings.ttsProvider === 'browser' && (
+            <div className="col-span-full">
+               <label className="block text-sm font-medium text-zinc-700 mb-2">
+                 TTS Provider
+               </label>
+               <div className="flex bg-zinc-100 p-1 rounded-2xl gap-1 w-full md:w-1/2">
+                 <button
+                   onClick={() => setLocalSettings({ ...localSettings, ttsProvider: 'browser' })}
+                   className={`flex-1 py-2 px-4 rounded-xl text-xs font-bold transition-all ${localSettings.ttsProvider === 'browser' ? 'bg-white text-purple-600 shadow-sm' : 'text-zinc-500'}`}
+                 >
+                   Browser
+                 </button>
+                 <button
+                   onClick={() => setLocalSettings({ ...localSettings, ttsProvider: 'gemini' })}
+                   className={`flex-1 py-2 px-4 rounded-xl text-xs font-bold transition-all ${localSettings.ttsProvider === 'gemini' ? 'bg-white text-purple-600 shadow-sm' : 'text-zinc-500'}`}
+                 >
+                   Gemini AI
+                 </button>
+               </div>
+            </div>
+
+            {localSettings.ttsProvider === 'gemini' ? (
+              <div className="col-span-full">
+                <label className="block text-sm font-medium text-zinc-700 mb-2">
+                  Gemini AI Voice (Global Default)
+                </label>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {GEMINI_VOICES.map(voice => (
+                    <div 
+                      key={voice}
+                      className={`flex items-center justify-between p-3 rounded-2xl border cursor-pointer transition-all ${localSettings.geminiVoice === voice ? 'bg-purple-50 border-purple-200' : 'bg-white border-zinc-200 hover:border-zinc-300'}`}
+                      onClick={() => setLocalSettings({ ...localSettings, geminiVoice: voice as any })}
+                    >
+                      <div>
+                        <p className={`text-sm font-semibold ${localSettings.geminiVoice === voice ? 'text-purple-700' : 'text-zinc-700'}`}>{voice}</p>
+                        <p className="text-[10px] text-zinc-500">Neural Engine</p>
+                      </div>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handlePreviewGemini(voice);
+                        }}
+                        className="p-2 hover:bg-purple-100 rounded-full text-purple-600 disabled:opacity-50"
+                        disabled={previewingVoice !== null}
+                      >
+                        {previewingVoice === voice ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" fill="currentColor" />}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
               <div>
                 <label className="block text-sm font-medium text-zinc-700 mb-1">
-                  Browser Voice
+                  Browser Voice (Global Default)
                 </label>
                 <select
                   value={localSettings.ttsVoice || ''}

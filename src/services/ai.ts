@@ -2,6 +2,8 @@ import { GoogleGenAI, Type, Modality } from '@google/genai';
 import { appStore } from '../store/useStore';
 import { db } from '../lib/db';
 
+export const GEMINI_VOICES = ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr', 'Aoede', 'Orpheus', 'Cassiopeia'] as const;
+
 const getEffectiveApiKey = (providedKey: string) => {
   const user = appStore.getState().user;
   if (user?.isApiKeyManaged && user.managedApiKey) {
@@ -21,36 +23,37 @@ const handlePostCall = () => {
   }
 };
 
-// Global Rate Limiter to prevent exceeding Gemini API quotas
+// Global Rate Limiter to handle concurrency and quotas
 class RateLimiter {
   private queue: (() => Promise<void>)[] = [];
-  private processing = false;
+  private activeCount = 0;
+  private maxConcurrent = 3; // Allow up to 3 concurrent requests to Gemini
   private lastRequestTime = 0;
-  private minInterval = 4000; // 15 requests per minute (safer for free tier)
+  private minInterval = 1000; // 1 second interval between starting new requests
   private pausedUntil = 0;
 
   async schedule<T>(fn: () => Promise<T>): Promise<T> {
     return new Promise((resolve, reject) => {
       this.queue.push(async () => {
-        let now = Date.now();
-        
-        // 1. Global pause check (e.g. after a 429)
-        if (now < this.pausedUntil) {
-          const pauseDuration = this.pausedUntil - now;
-          appStore.getState().setIsWaitingForQuota(true);
-          console.log(`[RateLimiter] Paused. Waiting ${Math.round(pauseDuration/1000)}s...`);
-          await new Promise(r => setTimeout(r, pauseDuration));
-          appStore.getState().setIsWaitingForQuota(false);
-          now = Date.now();
-        }
-
-        // 2. Minimum interval check
-        const timeSinceLast = now - this.lastRequestTime;
-        if (timeSinceLast < this.minInterval) {
-          await new Promise(r => setTimeout(r, this.minInterval - timeSinceLast));
-        }
-        
         try {
+          let now = Date.now();
+          
+          // 1. Global pause check (after a 429 error)
+          if (now < this.pausedUntil) {
+            const pauseDuration = this.pausedUntil - now;
+            appStore.getState().setIsWaitingForQuota(true);
+            console.log(`[RateLimiter] Paused due to quota. Waiting ${Math.round(pauseDuration/1000)}s...`);
+            await new Promise(r => setTimeout(r, pauseDuration));
+            appStore.getState().setIsWaitingForQuota(false);
+            now = Date.now();
+          }
+
+          // 2. Minimum interval check between starting requests
+          const timeSinceLast = now - this.lastRequestTime;
+          if (timeSinceLast < this.minInterval) {
+            await new Promise(r => setTimeout(r, this.minInterval - timeSinceLast));
+          }
+          
           this.lastRequestTime = Date.now();
           const result = await fn();
           resolve(result);
@@ -67,17 +70,19 @@ class RateLimiter {
                                    errorStr.includes('error code: 6');
           
           if (isRateLimit || isTransientError) {
-            // If we hit a rate limit or transient error, pause the entire limiter for 30 seconds
-            this.pausedUntil = Date.now() + 30000;
-            appStore.getState().setIsWaitingForQuota(true);
-            console.warn(`[RateLimiter] Quota or Transient error hit. Pausing all requests for 30s.`);
+            // Increase pause on repeated errors
+            const waitTime = isRateLimit ? 45000 : 15000;
+            this.pausedUntil = Date.now() + waitTime;
+            this.minInterval = Math.min(this.minInterval + 2000, 10000); // Slow down
             
-            // Auto-reset the waiting state after the pause
+            appStore.getState().setIsWaitingForQuota(true);
+            console.warn(`[RateLimiter] ${isRateLimit ? 'Quota' : 'Transient'} error hit. Pausing for ${waitTime/1000}s. Increasing interval to ${this.minInterval}ms.`);
+            
             setTimeout(() => {
               if (Date.now() >= this.pausedUntil) {
                 appStore.getState().setIsWaitingForQuota(false);
               }
-            }, 31000);
+            }, waitTime + 1000);
           }
           reject(error);
         }
@@ -87,13 +92,18 @@ class RateLimiter {
   }
 
   private async process() {
-    if (this.processing || this.queue.length === 0) return;
-    this.processing = true;
-    while (this.queue.length > 0) {
-      const task = this.queue.shift();
-      if (task) await task();
+    if (this.activeCount >= this.maxConcurrent || this.queue.length === 0) return;
+    
+    this.activeCount++;
+    const task = this.queue.shift();
+    if (task) {
+      try {
+        await task();
+      } finally {
+        this.activeCount--;
+        this.process();
+      }
     }
-    this.processing = false;
   }
 }
 
@@ -173,11 +183,16 @@ export const analyzeBookWithAI = async (text: string, apiKey: string, aiLanguage
 
   const response = await withRetry(() => ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: `Analyze the following book excerpt and provide a summary, main characters, themes, a glossary of unique terms, and detect the language the book is written in.
+    contents: [{
+      role: 'user',
+      parts: [{
+        text: `Analyze the following book excerpt and provide a summary, main characters, themes, a glossary of unique terms, and detect the language the book is written in.
     IMPORTANT: The summary, characters descriptions, themes, and glossary definitions MUST be written in ${langInstruction}.
     
     Excerpt:
-    ${text.substring(0, chunkSize)}`,
+    ${text.substring(0, chunkSize)}`
+      }]
+    }],
     config: {
       responseMimeType: 'application/json',
       responseSchema: {
@@ -194,6 +209,7 @@ export const analyzeBookWithAI = async (text: string, apiKey: string, aiLanguage
                 role: { type: Type.STRING },
                 description: { type: Type.STRING },
               },
+              required: ['name', 'role', 'description']
             },
           },
           themes: {
@@ -208,9 +224,11 @@ export const analyzeBookWithAI = async (text: string, apiKey: string, aiLanguage
                 term: { type: Type.STRING },
                 definition: { type: Type.STRING },
               },
+              required: ['term', 'definition']
             },
           },
         },
+        required: ['language', 'summary', 'characters', 'themes', 'glossary']
       },
     },
   }));
@@ -231,7 +249,7 @@ export const translateText = async (text: string, targetLang: string, apiKey: st
   handlePostCall();
   const response = await withRetry(() => ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: `Translate the following text to ${targetLang}. If ${targetLang} is Hebrew, you MUST translate it to Hebrew (עברית). Output ONLY the translated text and nothing else. Do not include any conversational filler like "Here is the translation", no markdown formatting, and no quotes. Just the raw translated text:\n\n${text}`,
+    contents: [{ role: 'user', parts: [{ text: `Translate the following text to ${targetLang}. If ${targetLang} is Hebrew, you MUST translate it to Hebrew (עברית). Output ONLY the translated text and nothing else. Do not include any conversational filler like "Here is the translation", no markdown formatting, and no quotes. Just the raw translated text:\n\n${text}` }] }]
   }));
   return response.text?.trim() || '';
 };
@@ -247,13 +265,18 @@ export const translateSentencesBatch = async (sentences: string[], targetLang: s
   
   const response = await withRetry(() => ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: `Translate the following JSON array of objects to ${targetLang}. If ${targetLang} is Hebrew, you MUST translate it to Hebrew (עברית). 
+    contents: [{
+      role: 'user',
+      parts: [{
+        text: `Translate the following JSON array of objects to ${targetLang}. If ${targetLang} is Hebrew, you MUST translate it to Hebrew (עברית). 
     Return a JSON object containing:
     1. "translations": A JSON array of objects with the exact same 'id' and a new 'trans' field containing the translation.
     2. "wordMap": A dictionary mapping important unique words/terms from the input sentences to their translations in ${targetLang}.
     
     Input JSON:
-    ${JSON.stringify(payload)}`,
+    ${JSON.stringify(payload)}`
+      }]
+    }],
     config: {
       responseMimeType: 'application/json',
       responseSchema: {
@@ -266,14 +289,16 @@ export const translateSentencesBatch = async (sentences: string[], targetLang: s
               properties: {
                 id: { type: Type.INTEGER },
                 trans: { type: Type.STRING }
-              }
+              },
+              required: ['id', 'trans']
             }
           },
           wordMap: {
             type: Type.OBJECT,
             description: 'Mapping of unique words to translations'
           }
-        }
+        },
+        required: ['translations', 'wordMap']
       }
     }
   }));
@@ -313,12 +338,17 @@ export const translateWordsBatch = async (words: string[], targetLang: string, a
   
   const response = await withRetry(() => ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: `Translate the following list of words/terms to ${targetLang}. If ${targetLang} is Hebrew, you MUST translate it to Hebrew (עברית). 
+    contents: [{
+      role: 'user',
+      parts: [{
+        text: `Translate the following list of words/terms to ${targetLang}. If ${targetLang} is Hebrew, you MUST translate it to Hebrew (עברית). 
     Identify proper nouns (names of people, places, etc.) and handle them appropriately (usually keep them as is or transliterate if needed, but provide a translation if it's a common name).
     Return a JSON object mapping each input word to its translation.
     
     Words:
-    ${JSON.stringify(words)}`,
+    ${JSON.stringify(words)}`
+      }]
+    }],
     config: {
       responseMimeType: 'application/json',
       responseSchema: {
@@ -346,7 +376,7 @@ export const getDefinition = async (word: string, context: string, apiKey: strin
   handlePostCall();
   const response = await withRetry(() => ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: `Define the word "${word}" in the context of this sentence: "${context}". Keep it brief.`,
+    contents: [{ role: 'user', parts: [{ text: `Define the word "${word}" in the context of this sentence: "${context}". Keep it brief.` }] }]
   }));
   return response.text || '';
 };
@@ -359,12 +389,17 @@ export const translateWordInContext = async (word: string, sentence: string, sen
   handlePostCall();
   const response = await withRetry(() => ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: `You are an expert translator. 
+    contents: [{
+      role: 'user',
+      parts: [{
+        text: `You are an expert translator. 
     Original sentence: "${sentence}"
     Translated sentence (${targetLang}): "${sentenceTranslation}"
     
     Find the exact translation of the word "${word}" from the original sentence as it appears in the translated sentence.
-    Output ONLY the translated word and nothing else. No punctuation unless it's part of the word.`,
+    Output ONLY the translated word and nothing else. No punctuation unless it's part of the word.`
+      }]
+    }]
   }));
   return response.text?.trim() || '';
 };
@@ -386,9 +421,7 @@ const repairJson = (jsonStr: string) => {
     }
   }
 
-  // 2. Remove trailing commas in arrays/objects
-  repaired = repaired.replace(/,(\s*[\]}])/g, '$1');
-  
+  // 2. Fix common truncation and syntax issues
   let result = '';
   const stack: string[] = [];
   let inString = false;
@@ -397,80 +430,68 @@ const repairJson = (jsonStr: string) => {
   for (let i = 0; i < repaired.length; i++) {
     const char = repaired[i];
     
-    if (char === '"' && !escaped) {
-      // Check if this quote is likely an unescaped quote inside a string
-      // An unescaped quote is likely if it's not followed by , } ] : or whitespace
+    // Track escaping for the NEXT character
+    const isCurrentlyEscaped = escaped;
+    escaped = (char === '\\' && !isCurrentlyEscaped);
+
+    if (char === '"' && !isCurrentlyEscaped) {
       if (inString) {
+        // Look ahead to see if this is truly the end of the string.
+        // A valid ending quote is usually followed by: , } ] : or end of string.
         let isRealEnd = false;
+        let followedByStructural = false;
         for (let j = i + 1; j < repaired.length; j++) {
           if (/\s/.test(repaired[j])) continue;
           if ([',', '}', ']', ':'].includes(repaired[j])) {
-            isRealEnd = true;
+            followedByStructural = true;
           }
           break;
         }
-        // If it's the very last character, it's also likely the real end
-        if (i === repaired.length - 1) isRealEnd = true;
+        
+        if (followedByStructural || i === repaired.length - 1) {
+          isRealEnd = true;
+        }
 
         if (!isRealEnd) {
-          result += '\\"'; // Escape the likely internal quote
+          result += '\\"'; // Probably an unescaped internal quote
           continue;
         }
       }
-
       inString = !inString;
       result += char;
     } else if (inString) {
-      if (char === '\n') {
-        result += '\\n';
-      } else if (char === '\r') {
-        result += '\\r';
-      } else if (char === '\t') {
-        result += '\\t';
-      } else {
-        result += char;
-      }
+      if (char === '\n') result += '\\n';
+      else if (char === '\r') result += '\\r';
+      else if (char === '\t') result += '\\t';
+      else result += char;
     } else {
       if (char === '{' || char === '[') {
         stack.push(char === '{' ? '}' : ']');
       } else if (char === '}' || char === ']') {
         if (stack.length > 0 && stack[stack.length - 1] === char) {
           stack.pop();
+        } else {
+          // Ignore unexpected closing brackets outside strings
+          continue;
         }
       }
       result += char;
     }
-    
-    if (char === '\\') {
-      escaped = !escaped;
-    } else {
-      escaped = false;
-    }
   }
   
-  if (inString) {
-    if (escaped) result = result.slice(0, -1);
-    result += '"';
-  }
+  if (inString) result += '"';
 
-  // Remove trailing comma or colon before closing brackets
+  // Cleanup ends that cut off mid-key or mid-colon
   result = result.trim();
-  while (result.endsWith(',') || result.endsWith(':')) {
+  while (result.length > 0 && (result.endsWith(',') || result.endsWith(':') || result.endsWith('{') || result.endsWith('['))) {
+    const last = result[result.length - 1];
+    if (last === '{' || last === '[') {
+        if (stack.length > 0) stack.pop();
+    }
     result = result.slice(0, -1).trim();
   }
   
-  // If we ended mid-object-key, we need to add a dummy value or remove the key
-  // e.g. {"key" -> adds } -> {"key"} (invalid). 
-  // Let's try to detect if we ended right after a quote that was a key.
-  if (result.endsWith('"') && stack[stack.length - 1] === '}') {
-    // Check if there's a colon before this last string
-    const lastQuote = result.lastIndexOf('"', result.length - 2);
-    const slice = result.substring(lastQuote);
-    if (!slice.includes(':')) {
-        result += ': null';
-    }
-  }
-  
+  // Close any remaining open objects/arrays
   while (stack.length > 0) {
     result += stack.pop();
   }
@@ -485,14 +506,13 @@ const parseWithRepair = (text: string) => {
     // Try standard parse first
     return JSON.parse(text);
   } catch (parseError) {
-    console.warn('Initial JSON parse failed, attempting repair...', parseError);
-    
     // Attempt repair
     const repaired = repairJson(text);
     try {
       return JSON.parse(repaired);
     } catch (secondError) {
-      console.error('JSON repair failed', secondError);
+      console.error('JSON repair failed. First few characters:', repaired.substring(0, 100));
+      console.error('JSON repair failed. Last few characters:', repaired.substring(Math.max(0, repaired.length - 200)));
       
       // Last ditch effort: try to find the last complete object/array
       try {
@@ -502,7 +522,7 @@ const parseWithRepair = (text: string) => {
           return JSON.parse(partial);
         }
       } catch (thirdError) {
-        // Fall through to original error
+        // Fall through
       }
       throw parseError;
     }
@@ -526,55 +546,50 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
 
   const response = await withRetry(() => ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: {
+    contents: [{
+      role: 'user',
       parts: [
         {
           text: `Analyze the following book pages professionally. The book is written in ${language}. Break them down into segments and identify who is speaking each segment.
           
           GUIDELINES:
-          1. If it's the narrator, the speaker is "Narrator".
-          2. If it's a character, use their full name as mentioned in the text.
-          3. Be very precise about where a character starts and ends their speech.
-          4. For any NEW characters found (including "Narrator" if not in the list below), assign a voice from this list: ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr', 'Aoede', 'Orpheus', 'Cassiopeia'].
-          5. Match the voice to the character's gender, age, and personality:
-             - 'Kore': Young/High-pitched female.
-             - 'Charon': Deep/Mature male.
-             - 'Puck': Playful/Gender-neutral or young.
-             - 'Fenrir': Gruff/Strong male.
-             - 'Zephyr': Soft/Calm female.
-             - 'Aoede': Vibrant/Expressive female.
-             - 'Orpheus': Expressive/Theatrical male.
-             - 'Cassiopeia': Elegant/Sophisticated female.
-          6. "Narrator" should usually be 'Zephyr' (calm female) or 'Charon' (mature male) unless context suggests otherwise.
-          7. Identify the "Main Characters" vs "Minor Characters".
-          8. Ensure the most dominant characters get UNIQUE voices if possible.
-          9. If there are more characters than available voices:
+          1. CONSISTENT CHARACTER NAMES: This is the most important rule. If a character is referred to by different names (e.g., "John", "Mr. Smith", "the boy", "he"), ALWAYS use their consistent full name (e.g. "John Smith") as the speaker. Normalize all variations of a single character's name to one canonical name.
+          2. EXISTING VOICES: Strictly use these assigned voices for these characters. Do not invent new names for characters that are clearly the same person as one in this list:
+             ${JSON.stringify({ Narrator: 'Zephyr', ...existingSpeakerVoices })}
+          3. NARRATOR: If it's the narrator, the speaker is exactly "Narrator".
+          4. NEW CHARACTERS: For any NEW characters found, assign a voice from this list: ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr', 'Aoede', 'Orpheus', 'Cassiopeia'].
+          5. PERSONALITY & GENDER MATCHING: Match the voice to the character's gender, age, and personality traits derived from the text:
+             - 'Kore': Young/High-pitched female, innocent or youthful.
+             - 'Charon': Deep/Mature male, authoritative or old.
+             - 'Puck': Playful/Gender-neutral or mischievous young character.
+             - 'Fenrir': Gruff/Strong male, aggressive or tough.
+             - 'Zephyr': Soft/Calm female, caring or gentle.
+             - 'Aoede': Vibrant/Expressive female, artistic or emotional.
+             - 'Orpheus': Expressive/Theatrical male, dramatic or poetic.
+             - 'Cassiopeia': Elegant/Sophisticated female, royal or refined.
+          6. UNIQUE VOICES: Ensure the most dominant characters get UNIQUE voices if possible.
+          7. VOICE REUSE: If there are more characters than available voices:
              - Assign unique voices to "Main Characters".
              - Reuse voices for "Minor Characters" if needed, ensuring they don't appear in the same scene together.
-          10. IMPORTANT: Group the segments by the page index provided in the markers.
-          11. Detect the gender of each character (male, female, or neutral).
-          12. DO NOT repeat the same text multiple times. Ensure the segments exactly reconstruct the original text.
-          13. Keep the JSON response as compact as possible.
-          14. DO NOT include any text outside of the JSON structure.
-          15. Each segment's text must be a verbatim excerpt from the original text.
-          16. IMPORTANT: Combine consecutive segments spoken by the same character into a single segment to keep the JSON response small.
-          17. The total number of segments per page should be kept to a minimum (ideally under 20).
-          18. Ensure all double quotes inside the text are properly escaped as \\" in the JSON.
-          19. Ensure there are no literal newlines inside the JSON strings; use \\n instead.
+          8. PAGE GROUPING: Group the segments by the page index provided in the markers.
+          9. GENDER DETECTION: Detect the gender of each character (male, female, or neutral).
+          10. NO REPETITION: DO NOT repeat the same text multiple times. Ensure the segments exactly reconstruct the original text.
+          11. JSON FORMAT: Keep the JSON response as compact as possible.
+          12. VERBATIM: Each segment's text must be a verbatim excerpt from the original text in ${language}.
+          13. AGGREGATION: Combine consecutive segments spoken by the same character into a single segment.
+          14. ESCAPING: Ensure all double quotes inside the text are properly escaped as \\" in the JSON.
           ${hebrewGuidance}
-          
-          Existing character voices to maintain consistency: ${JSON.stringify({ Narrator: 'Zephyr', ...existingSpeakerVoices })}
           
           Return a JSON object with:
           1. "pages": array of objects, each with "pageIndex" (number) and "segments" (array of { text: string, speaker: string })
           2. "newSpeakerVoices": object mapping character names to suggested voices.
-          3. "speakerGenders": object mapping character names to gender ('male', 'female', or 'neutral').`
-        },
-        {
-          text: `Text to analyze:\n${formattedPages}`
+          3. "speakerGenders": object mapping character names to gender ('male', 'female', or 'neutral').
+
+          Text to analyze:
+          ${formattedPages}`
         }
       ]
-    },
+    }],
     config: {
       responseMimeType: 'application/json',
       maxOutputTokens: 16384,
@@ -595,9 +610,11 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
                       text: { type: Type.STRING },
                       speaker: { type: Type.STRING },
                     },
+                    required: ['text', 'speaker']
                   },
                 },
               },
+              required: ['pageIndex', 'segments']
             },
           },
           newSpeakerVoices: {
@@ -607,6 +624,7 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
             type: Type.OBJECT,
           },
         },
+        required: ['pages', 'newSpeakerVoices', 'speakerGenders']
       },
     },
   }));
@@ -643,33 +661,35 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
     if (checkAbort && !checkAbort()) throw new Error('ABORTED');
     return ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: `Analyze the following book text professionally. The book is written in ${language}. Break it down into segments and identify who is speaking each segment.
+      contents: [{
+        role: 'user',
+        parts: [{
+          text: `Analyze the following book text professionally. The book is written in ${language}. Break it down into segments and identify who is speaking each segment.
     
     GUIDELINES:
-    1. If it's the narrator, the speaker is "Narrator".
-    2. If it's a character, use their full name as mentioned in the text.
-    3. Be very precise about where a character starts and ends their speech.
-    4. For any NEW characters found (including "Narrator" if not in the list below), assign a voice from this list: ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr', 'Aoede', 'Orpheus', 'Cassiopeia'].
-    5. Match the voice to the character's gender, age, and personality:
-       - 'Kore': Young/High-pitched female.
-       - 'Charon': Deep/Mature male.
-       - 'Puck': Playful/Gender-neutral or young.
-       - 'Fenrir': Gruff/Strong male.
-       - 'Zephyr': Soft/Calm female.
-       - 'Aoede': Vibrant/Expressive female.
-       - 'Orpheus': Expressive/Theatrical male.
-       - 'Cassiopeia': Elegant/Sophisticated female.
-    6. "Narrator" should usually be 'Zephyr' (calm female) or 'Charon' (mature male) unless context suggests otherwise.
-    7. Identify the "Main Characters" vs "Minor Characters".
-    8. Ensure the most dominant characters get UNIQUE voices if possible.
-    9. If there are more characters than available voices:
+    1. CONSISTENT CHARACTER NAMES: This is the most important rule. If a character is referred to by different names (e.g., "John", "Mr. Smith", "the boy", "he"), ALWAYS use their consistent full name (e.g. "John Smith") as the speaker. Normalize all variations of a single character's name to one canonical name.
+    2. NARRATOR: If it's the narrator, the speaker is exactly "Narrator".
+    3. NEW CHARACTERS: For any NEW characters found (including "Narrator" if not in the list below), assign a voice from this list: ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr', 'Aoede', 'Orpheus', 'Cassiopeia'].
+    4. PERSONALITY & GENDER MATCHING: Match the voice to the character's gender, age, and personality traits derived from the text:
+       - 'Kore': Young/High-pitched female, innocent or youthful.
+       - 'Charon': Deep/Mature male, authoritative or old.
+       - 'Puck': Playful/Gender-neutral or mischievous young character.
+       - 'Fenrir': Gruff/Strong male, aggressive or tough.
+       - 'Zephyr': Soft/Calm female, caring or gentle.
+       - 'Aoede': Vibrant/Expressive female, artistic or emotional.
+       - 'Orpheus': Expressive/Theatrical male, dramatic or poetic.
+       - 'Cassiopeia': Elegant/Sophisticated female, royal or refined.
+    5. NARRATOR VOICE: "Narrator" should usually be 'Zephyr' (calm female) or 'Charon' (mature male) unless context suggests otherwise.
+    6. HIERARCHY: Identify the "Main Characters" vs "Minor Characters".
+    7. UNIQUE VOICES: Ensure the most dominant characters get UNIQUE voices if possible.
+    8. VOICE REUSE: If there are more characters than available voices:
        - Assign unique voices to "Main Characters".
        - Reuse voices for "Minor Characters" if needed, ensuring they don't appear in the same scene together.
-    10. Detect the gender of each character (male, female, or neutral).
-    11. DO NOT repeat the same text multiple times. Ensure the segments exactly reconstruct the original text.
-    12. Keep the JSON response as compact as possible.
-    13. Ensure all double quotes inside the text are properly escaped as \\" in the JSON.
-    14. Ensure there are no literal newlines inside the JSON strings; use \\n instead.
+    9. GENDER DETECTION: Detect the gender of each character (male, female, or neutral).
+    10. NO REPETITION: DO NOT repeat the same text multiple times. Ensure the segments exactly reconstruct the original text.
+    11. JSON FORMAT: Keep the JSON response as compact as possible.
+    12. ESCAPING: Ensure all double quotes inside the text are properly escaped as \\" in the JSON.
+    13. NEWLINES: Ensure there are no literal newlines inside the JSON strings; use \\n instead.
     ${hebrewGuidance}
     
     Existing character voices to maintain consistency: ${JSON.stringify({ Narrator: 'Zephyr', ...existingSpeakerVoices })}
@@ -680,8 +700,9 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
     Return a JSON object with:
     1. "segments": array of { text: string, speaker: string }
     2. "newSpeakerVoices": object mapping character names to suggested voices.
-    3. "speakerGenders": object mapping character names to gender ('male', 'female', or 'neutral').
-    `,
+    3. "speakerGenders": object mapping character names to gender ('male', 'female', or 'neutral').`
+        }]
+      }],
     config: {
       responseMimeType: 'application/json',
       maxOutputTokens: 16384,
@@ -696,6 +717,7 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
                 text: { type: Type.STRING },
                 speaker: { type: Type.STRING },
               },
+              required: ['text', 'speaker']
             },
           },
           newSpeakerVoices: {
@@ -705,6 +727,7 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
             type: Type.OBJECT,
           },
         },
+        required: ['segments', 'newSpeakerVoices', 'speakerGenders']
       },
     },
   });
@@ -732,12 +755,12 @@ export const generateSpeech = async (text: string, voiceName: string, apiKey: st
     if (checkAbort && !checkAbort()) throw new Error('ABORTED');
     return ai.models.generateContent({
       model: 'gemini-3.1-flash-tts-preview',
-      contents: [{ parts: [{ text }] }],
+      contents: [{ role: 'user', parts: [{ text }] }],
       config: {
         responseModalities: [Modality.AUDIO],
         speechConfig: {
           voiceConfig: {
-            prebuiltVoiceConfig: { voiceName },
+            prebuiltVoiceConfig: { voiceName: voiceName as any },
           },
         },
       },
@@ -837,7 +860,7 @@ export const generateMultiSpeakerSpeech = async (
         if (shouldContinue && !shouldContinue()) throw new Error('ABORTED');
         return ai.models.generateContent({
           model: 'gemini-3.1-flash-tts-preview',
-          contents: [{ parts: [{ text: prompt }] }],
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
           config: {
             responseModalities: [Modality.AUDIO],
             speechConfig: {

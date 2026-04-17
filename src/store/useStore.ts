@@ -93,6 +93,7 @@ export interface AppSettings {
   apiKey: string;
   highlightStyle: 'yellow-bg' | 'underline' | 'bold' | 'text-blue' | 'character-based';
   geminiVoice: 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' | 'Aoede' | 'Orpheus' | 'Cassiopeia';
+  browserVoice?: string;
   subtitleLanguage: string;
   autoTurnPage: boolean;
   isSubtitleTranslationEnabled: boolean;
@@ -100,6 +101,7 @@ export interface AppSettings {
   highlightSavedQuotes: boolean;
   aiChunkSizeMultiplier: number;
   aiLanguage: 'he' | 'en' | 'es';
+  ttsProvider: 'browser' | 'gemini';
 }
 
 interface AppState {
@@ -148,6 +150,7 @@ export const useStore = create<AppState>()(
         highlightSavedQuotes: true,
         aiChunkSizeMultiplier: 1,
         aiLanguage: 'he',
+        ttsProvider: 'browser',
       },
       login: (user) => set({ user }),
       logout: () => set({ user: null }),

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Save, X, ChevronLeft, ChevronRight, Trash, Plus, Bold, Underline, Sparkles, Loader2, User, Volume2, Play, Check, Captions } from 'lucide-react';
+import { Save, X, ChevronLeft, ChevronRight, Trash, Plus, Bold, Underline, Sparkles, Loader2, User, Volume2, Play, Check, Captions, Edit3, Type, Wand2 } from 'lucide-react';
 import { useStore, Book } from '../store/useStore';
 import { db } from '../lib/db';
 import { Button } from '../components/ui/Button';
@@ -52,6 +52,91 @@ export default function BookOrchestrator() {
   const [cancelDictionary, setCancelDictionary] = useState(false);
   const [availableBrowserVoices, setAvailableBrowserVoices] = useState<SpeechSynthesisVoice[]>([]);
 
+  const advancedTextareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const [isAdvancedEditorOpen, setIsAdvancedEditorOpen] = useState(false);
+  const [showApplyConfirm, setShowApplyConfirm] = useState(false);
+  const [fullText, setFullText] = useState('');
+  const [isAutoDetecting, setIsAutoDetecting] = useState(false);
+  const [editorFontSize, setEditorFontSize] = useState(16);
+
+  const handleFormatTextAdvanced = (type: 'bold' | 'underline') => {
+    const textarea = advancedTextareaRef.current;
+    if (!textarea) return;
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const selection = fullText.substring(start, end);
+
+    const startTag = type === 'bold' ? '<<BOLD_START>>' : '<<UNDERLINE_START>>';
+    const endTag = type === 'bold' ? '<<BOLD_END>>' : '<<UNDERLINE_END>>';
+
+    const newText = fullText.substring(0, start) + startTag + selection + endTag + fullText.substring(end);
+    setFullText(newText);
+
+    setTimeout(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + startTag.length, end + startTag.length);
+    }, 0);
+  };
+
+  const handleInsertPageBreak = () => {
+    const textarea = advancedTextareaRef.current;
+    if (!textarea) return;
+
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const breakTag = '\n<<LUMINA_PAGE_BREAK>>\n';
+
+    const newText = fullText.substring(0, start) + breakTag + fullText.substring(end);
+    setFullText(newText);
+
+    setTimeout(() => {
+      textarea.focus();
+      textarea.setSelectionRange(start + breakTag.length, start + breakTag.length);
+    }, 0);
+  };
+
+  const jumpToPageMarker = (pageNumber: number) => {
+    const textarea = advancedTextareaRef.current;
+    if (!textarea) return;
+
+    // Split text into chunks to find start of page
+    const chunks = fullText.split('<<LUMINA_PAGE_BREAK>>');
+    let offset = 0;
+    for (let i = 0; i < Math.min(pageNumber - 1, chunks.length); i++) {
+      offset += chunks[i].length + '<<LUMINA_PAGE_BREAK>>'.length;
+    }
+
+    textarea.focus();
+    textarea.setSelectionRange(offset, offset);
+  };
+
+  const deleteCurrentPageAdvanced = () => {
+    const textarea = advancedTextareaRef.current;
+    if (!textarea) return;
+    const pos = textarea.selectionStart;
+    
+    const chunks = fullText.split('<<LUMINA_PAGE_BREAK>>');
+    let currentPos = 0;
+    let targetIndex = -1;
+
+    for (let i = 0; i < chunks.length; i++) {
+      const nextPos = currentPos + chunks[i].length + (i < chunks.length - 1 ? '<<LUMINA_PAGE_BREAK>>'.length : 0);
+      if (pos >= currentPos && pos <= nextPos) {
+        targetIndex = i;
+        break;
+      }
+      currentPos = nextPos;
+    }
+
+    if (targetIndex !== -1 && chunks.length > 1) {
+      const updatedChunks = [...chunks];
+      updatedChunks.splice(targetIndex, 1);
+      setFullText(updatedChunks.join('<<LUMINA_PAGE_BREAK>>'));
+    }
+  };
+
   useEffect(() => {
     const loadVoices = () => {
       const voices = window.speechSynthesis.getVoices();
@@ -84,6 +169,97 @@ export default function BookOrchestrator() {
       loadBook(id);
     }
   }, [id]);
+
+  const handleOpenAdvancedEditor = () => {
+    // Combine pages into full text with markers
+    const combined = pages.map((p, i) => `<<PAGE:${i + 1}>>\n${p}`).join('\n<<LUMINA_PAGE_BREAK>>\n');
+    setFullText(combined);
+    setIsAdvancedEditorOpen(true);
+  };
+
+  const handleApplyAdvancedChanges = async () => {
+    // Split full text back into pages
+    const pageMarkers = fullText.split(/<<LUMINA_PAGE_BREAK>>/);
+    const newPages = pageMarkers.map(p => {
+      // Remove <<PAGE:N>> header if present to avoid duplication during save
+      return p.replace(/<<PAGE:\d+>>\n?/g, '').trim();
+    }).filter(p => p.length > 0);
+    
+    if (newPages.length === 0 && fullText.trim().length > 0) {
+      // If no page breaks were found but there is text, treat as one page
+      newPages.push(fullText.trim());
+    }
+
+    setPages(newPages);
+    setIsAdvancedEditorOpen(false);
+  };
+
+  const autoDetectChapters = () => {
+    setIsAutoDetecting(true);
+    // Enhanced logic to find common chapter patterns
+    const chapterPatterns = [
+      // English
+      /^(chapter|part|section|introduction|preface|foreword|prologue|epilogue|conclusion|summary)\s*([\d\w.-]*)/i,
+      /^(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)$/i,
+      // Hebrew
+      /^(פרק|חלק|שער|הקדמה|מבוא|פתח\s+דבר|סוף\s+דבר|סיכום|מסקנות)\s*([\u05d0-\u05ea\d.-]*)/i,
+      // Roman Numerals or simple numbers at start of line
+      /^[IXVLCDM]+\.?$/i,
+      /^\d+\.?$/
+    ];
+
+    const lines = fullText.split('\n');
+    const processedLines = lines.map(line => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.length < 2) return line;
+      
+      // If it's already marked, skip
+      if (trimmed.includes('<<BOLD_START>>')) return line;
+
+      const isPatternMatch = chapterPatterns.some(p => p.test(trimmed));
+      const looksLikeTitle = trimmed.length < 50 && 
+                             !trimmed.endsWith('.') && 
+                             !trimmed.endsWith(',') && 
+                             !trimmed.endsWith(';') && 
+                             !trimmed.endsWith(':') &&
+                             !trimmed.includes('  ');
+
+      if (isPatternMatch || looksLikeTitle) {
+        return `<<BOLD_START>>${trimmed}<<BOLD_END>>`;
+      }
+      return line;
+    });
+
+    setFullText(processedLines.join('\n'));
+    setIsAutoDetecting(false);
+  };
+
+  const rePaginate = (charsPerPage: number = 2000) => {
+    // Remove all existing pagination markers
+    let clean = fullText.replace(/<<PAGE:\d+>>\n?/g, '');
+    clean = clean.replace(/<<LUMINA_PAGE_BREAK>>\n?/g, '');
+    
+    const paragraphs = clean.split('\n\n');
+    let currentText = '';
+    let result = '';
+    let pageCount = 1;
+
+    paragraphs.forEach((p, i) => {
+      if (currentText.length + p.length > charsPerPage && currentText.length > 0) {
+        result += `<<PAGE:${pageCount}>>\n${currentText.trim()}\n<<LUMINA_PAGE_BREAK>>\n`;
+        currentText = p + '\n\n';
+        pageCount++;
+      } else {
+        currentText += p + '\n\n';
+      }
+    });
+
+    if (currentText.trim()) {
+      result += `<<PAGE:${pageCount}>>\n${currentText.trim()}`;
+    }
+
+    setFullText(result);
+  };
 
   const loadBook = async (bookId: string) => {
     const b = await db.getBook(bookId);
@@ -313,63 +489,64 @@ export default function BookOrchestrator() {
       let currentWordMap = { ...(book.subtitles?.[targetSubtitleLanguage]?.wordTranslations || {}) };
       let latestBook = book;
       let wordsSinceLastSave = 0;
+      let completedWords = 0;
 
       console.log(`[Dictionary] Starting translation batches. Current dictionary size: ${Object.keys(currentWordMap).length}`);
-
+      
+      const batches: string[][] = [];
       for (let i = 0; i < uniqueWords.length; i += batchSize) {
-        if (cancelRef.current) {
-          console.log(`[Dictionary] Generation cancelled by user.`);
-          break;
-        }
-
         const batch = uniqueWords.slice(i, i + batchSize);
-        // Skip words already in dictionary
         const wordsToTranslate = batch.filter(w => !currentWordMap[w.toLowerCase()]);
-        
         if (wordsToTranslate.length > 0) {
-          console.log(`[Dictionary] Translating batch ${Math.floor(i/batchSize) + 1}. Words to translate: ${wordsToTranslate.length}`);
-          const translatedBatch = await translateWordsBatch(wordsToTranslate, targetSubtitleLanguage, apiKey);
+          batches.push(wordsToTranslate);
+        } else {
+          completedWords += batch.length;
+        }
+      }
+
+      const dictionaryPromises = batches.map(async (batch, batchIdx) => {
+        if (cancelRef.current) return;
+
+        try {
+          const translatedBatch = await translateWordsBatch(batch, targetSubtitleLanguage, apiKey);
           
+          if (cancelRef.current) return;
+
           if (translatedBatch) {
-            const newWordsCount = Object.keys(translatedBatch).length;
-            console.log(`[Dictionary] Received ${newWordsCount} translations.`);
             Object.entries(translatedBatch).forEach(([word, trans]) => {
               currentWordMap[word.toLowerCase()] = trans as string;
             });
-            wordsSinceLastSave += wordsToTranslate.length;
-          } else {
-            console.warn(`[Dictionary] Batch ${Math.floor(i/batchSize) + 1} returned no results.`);
+            wordsSinceLastSave += batch.length;
           }
-        } else {
-          console.log(`[Dictionary] Skipping batch ${Math.floor(i/batchSize) + 1} (all words already translated).`);
+
+          completedWords += batch.length;
+          setDictionaryProgress(Math.min(100, Math.round((completedWords / totalWords) * 100)));
+
+          // Save incrementally every 1000 new words or at the end
+          if (wordsSinceLastSave >= 1000 || completedWords >= totalWords) {
+            console.log(`[Dictionary] Saving progress... (${Object.keys(currentWordMap).length} words total)`);
+            const updatedSubtitles = {
+              ...(latestBook.subtitles || {}),
+              [targetSubtitleLanguage]: {
+                ...(latestBook.subtitles?.[targetSubtitleLanguage] || { pages: {}, lastUpdated: Date.now() }),
+                wordTranslations: { ...currentWordMap },
+                lastUpdated: Date.now()
+              }
+            };
+            const updatedBook = { ...latestBook, subtitles: updatedSubtitles };
+            latestBook = updatedBook;
+            setBook(updatedBook);
+            updateBook(book.id, { subtitles: updatedSubtitles });
+            await db.updateBookField(book.id, 'subtitles', updatedSubtitles);
+            wordsSinceLastSave = 0;
+          }
+        } catch (err) {
+          console.error(`Dictionary batch ${batchIdx} failed:`, err);
+          throw err;
         }
+      });
 
-        const progress = Math.round(((i + batchSize) / totalWords) * 100);
-        setDictionaryProgress(Math.min(100, progress));
-
-        // Save incrementally every 1000 new words or at the end
-        if (wordsSinceLastSave >= 1000 || i + batchSize >= totalWords) {
-          console.log(`[Dictionary] Saving progress to database... (${Object.keys(currentWordMap).length} words total)`);
-          const updatedSubtitles = {
-            ...(latestBook.subtitles || {}),
-            [targetSubtitleLanguage]: {
-              ...(latestBook.subtitles?.[targetSubtitleLanguage] || { pages: {}, lastUpdated: Date.now() }),
-              wordTranslations: currentWordMap,
-              lastUpdated: Date.now()
-            }
-          };
-          const updatedBook = { ...latestBook, subtitles: updatedSubtitles };
-          latestBook = updatedBook;
-          setBook(updatedBook);
-          updateBook(book.id, { subtitles: updatedSubtitles });
-          await db.updateBookField(book.id, 'subtitles', updatedSubtitles);
-          wordsSinceLastSave = 0;
-        }
-
-        // Small delay to be nice to the API
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-
+      await Promise.all(dictionaryPromises);
     } catch (err: any) {
       console.error("Dictionary generation failed", err);
       const errorStr = (err?.message || JSON.stringify(err)).toLowerCase();
@@ -477,112 +654,107 @@ export default function BookOrchestrator() {
     let hasError = false;
 
     try {
+      // 1. Prepare all batches
+      const batches: { index: number, text: string }[][] = [];
       for (let i = 0; i < pages.length; i += BATCH_SIZE) {
-        if (cancelRef.current) break;
-        batchCount++;
-
-        let newlyMarkedEmpty = false;
         const batchPages: { index: number, text: string }[] = [];
         for (let j = 0; j < BATCH_SIZE && (i + j) < pages.length; j++) {
           const pageIdx = i + j;
-          // Skip pages that are already dramatized if not starting fresh
-          if (!startFresh && currentPagesDramatization[pageIdx]) {
-            continue;
-          }
+          if (!startFresh && currentPagesDramatization[pageIdx]) continue;
+          
           const cleanText = getCleanText(pages[pageIdx]);
           if (cleanText.trim()) {
             batchPages.push({ index: pageIdx, text: cleanText });
           } else {
-            // Mark empty pages as dramatized with empty segments so they count towards progress
             currentPagesDramatization[pageIdx] = { segments: [] };
-            newlyMarkedEmpty = true;
           }
         }
+        if (batchPages.length > 0) {
+          batches.push(batchPages);
+        }
+      }
 
-        if (batchPages.length === 0) {
-          if (newlyMarkedEmpty) {
-            // If we marked some empty pages, save them
+      console.log(`[Dramatizer] Total batches to process: ${batches.length}`);
+      
+      let completedBatches = 0;
+      const totalBatches = batches.length;
+
+      // 2. Process batches with controlled parallelism via RateLimiter
+      // We map each batch to a promise and run them. RateLimiter will throttle to 3 at a time.
+      const batchPromises = batches.map(async (batch, batchIdx) => {
+        if (cancelRef.current) return;
+
+        let result = null;
+        try {
+          // Analyze speakers for this batch. Retries are handled inside withRetry.
+          result = await analyzeSpeakersBatch(batch, apiKey, currentSpeakerVoices, bookLanguage);
+          
+          if (cancelRef.current) return;
+
+          if (result && result.pages) {
+            // Update local state variables (these are shared, but we update them carefully)
+            const newSpeakerVoices = { ...currentSpeakerVoices, ...(result.newSpeakerVoices || {}) };
+            const newSpeakerGenders = { ...currentSpeakerGenders, ...(result.speakerGenders || {}) };
+            
+            // Note: Since multiple batches finish at different times, we merge results
+            // In a real production app, we'd use a mutex or more robust state management,
+            // but for this UI, simple merging is usually fine given the structure.
+            Object.assign(currentSpeakerVoices, newSpeakerVoices);
+            Object.assign(currentSpeakerGenders, newSpeakerGenders);
+            
+            result.pages.forEach((pageData: any) => {
+              const segmentsWithVoices = pageData.segments.map((s: any) => {
+                let voice = currentSpeakerVoices[s.speaker];
+                if (!voice) {
+                  // Fallback assignment logic based on gender if voice mapping missed it
+                  const gender = currentSpeakerGenders[s.speaker] || 'neutral';
+                  if (gender === 'female') voice = 'Zephyr';
+                  else if (gender === 'male') voice = 'Charon';
+                  else voice = 'Puck';
+                  currentSpeakerVoices[s.speaker] = voice;
+                }
+                return {
+                  ...s,
+                  voice
+                };
+              });
+              currentPagesDramatization[pageData.pageIndex] = { segments: segmentsWithVoices };
+            });
+
+            // Update store UI
+            setSpeakerVoices({ ...currentSpeakerVoices });
+            
             const updatedDramatization = {
-              pages: currentPagesDramatization,
-              speakerVoices: currentSpeakerVoices,
-              speakerGenders: currentSpeakerGenders
+              pages: { ...currentPagesDramatization },
+              speakerVoices: { ...currentSpeakerVoices },
+              speakerGenders: { ...currentSpeakerGenders }
             };
+            
             const updatedBook = { ...latestBook, dramatization: updatedDramatization };
             latestBook = updatedBook;
             setBook(updatedBook);
             updateBook(book.id, { dramatization: updatedDramatization });
-            
-            // Throttle Firestore saves: only save every 3 batches or at the end
-            if (batchCount % 3 === 0 || i + BATCH_SIZE >= pages.length) {
+
+            // Save to Firestore every N batches OR at the very end of all batches
+            completedBatches++;
+            if (completedBatches % 3 === 0 || completedBatches === totalBatches) {
               await db.saveBook(updatedBook);
             }
           }
-
-          const totalDone = Object.keys(currentPagesDramatization).length;
-          setDramatizationProgress(Math.min(100, Math.round((totalDone / pages.length) * 100)));
-          continue;
+        } catch (err) {
+          console.error(`Batch ${batchIdx} failed after retries:`, err);
+          hasError = true;
+          throw err;
         }
 
-        // Add a small delay between requests to proactively avoid rate limits
-        if (i > 0) {
-          await new Promise(resolve => setTimeout(resolve, 3000));
-        }
-
-        let result = null;
-        let retryCount = 0;
-        const maxRetries = 2;
-        
-        while (retryCount <= maxRetries) {
-          try {
-            result = await analyzeSpeakersBatch(batchPages, apiKey, currentSpeakerVoices, bookLanguage);
-            break;
-          } catch (batchErr) {
-            retryCount++;
-            if (retryCount > maxRetries) throw batchErr;
-            console.warn(`Batch failed, retrying (${retryCount}/${maxRetries})...`, batchErr);
-            await new Promise(resolve => setTimeout(resolve, 3000 * retryCount));
-          }
-        }
-        
-        if (result && result.pages) {
-          const newSpeakerVoices = { ...currentSpeakerVoices, ...(result.newSpeakerVoices || {}) };
-          const newSpeakerGenders = { ...currentSpeakerGenders, ...(result.speakerGenders || {}) };
-          currentSpeakerVoices = newSpeakerVoices;
-          currentSpeakerGenders = newSpeakerGenders;
-          setSpeakerVoices(newSpeakerVoices);
-
-          result.pages.forEach((pageData: any) => {
-            const segmentsWithVoices = pageData.segments.map((s: any) => ({
-              ...s,
-              voice: newSpeakerVoices[s.speaker] || 'Kore'
-            }));
-            currentPagesDramatization[pageData.pageIndex] = { segments: segmentsWithVoices };
-          });
-
-          // Save incrementally
-          const updatedDramatization = {
-            pages: currentPagesDramatization,
-            speakerVoices: currentSpeakerVoices,
-            speakerGenders: currentSpeakerGenders
-          };
-          const updatedBook = { ...latestBook, dramatization: updatedDramatization };
-          latestBook = updatedBook;
-          setBook(updatedBook);
-          updateBook(book.id, { dramatization: updatedDramatization });
-          
-          // Throttle Firestore saves: only save every 3 batches or at the end
-          if (batchCount % 3 === 0 || i + BATCH_SIZE >= pages.length) {
-            await db.saveBook(updatedBook);
-            // Give the write stream a moment to breathe after a large write
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          }
-        }
-        
         const totalDone = Object.keys(currentPagesDramatization).length;
         setDramatizationProgress(Math.min(100, Math.round((totalDone / pages.length) * 100)));
-      }
-      
-      if (!cancelRef.current) {
+      });
+
+      // Wait for all batches to finish
+      await Promise.all(batchPromises);
+
+      if (!cancelRef.current && !hasError) {
         setDramatizationProgress(100);
       }
     } catch (err: any) {
@@ -694,6 +866,156 @@ export default function BookOrchestrator() {
               <Button onClick={confirmDeletePage} className="bg-red-600 hover:bg-red-700 text-white border-transparent">Delete</Button>
             </div>
           </div>
+        </div>
+      )}
+
+      {isAdvancedEditorOpen && (
+        <div className="fixed inset-0 bg-white z-[200] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
+          <header className="flex items-center justify-between p-4 border-b border-zinc-200 bg-white">
+            <div className="flex items-center gap-4">
+              <Button variant="ghost" size="icon" onClick={() => setIsAdvancedEditorOpen(false)}>
+                <X size={20} />
+              </Button>
+              <div>
+                <h2 className="text-lg font-bold text-zinc-900 leading-tight">Advanced Text Editor</h2>
+                <p className="text-xs text-zinc-500">Edit full book content and structure</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="flex bg-zinc-100 rounded-lg p-1 mr-4 hidden md:flex items-center gap-1">
+                <Button variant="ghost" size="sm" onClick={() => handleFormatTextAdvanced('bold')} title="Bold (Selection)" className="h-8 w-8 p-0 hover:bg-white hover:shadow-sm">
+                  <Bold size={14} />
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => handleFormatTextAdvanced('underline')} title="Underline (Selection)" className="h-8 w-8 p-0 hover:bg-white hover:shadow-sm">
+                  <Underline size={14} />
+                </Button>
+                <div className="w-px h-4 bg-zinc-300 mx-1" />
+                <Button variant="ghost" size="sm" onClick={handleInsertPageBreak} title="Insert Page Break" className="h-8 px-2 text-[10px] font-bold uppercase tracking-tight hover:bg-white hover:shadow-sm">
+                  <Plus size={10} className="mr-1" /> Page Break
+                </Button>
+                <Button variant="ghost" size="sm" onClick={deleteCurrentPageAdvanced} title="Delete Current Page Chunk" className="h-8 px-2 text-[10px] font-bold uppercase tracking-tight text-red-500 hover:bg-white hover:shadow-sm">
+                  <Trash size={10} className="mr-1" /> Delete
+                </Button>
+              </div>
+
+              <div className="flex bg-zinc-100 rounded-lg p-1 mr-4 hidden md:flex">
+                <Button variant="ghost" size="sm" onClick={() => setEditorFontSize(prev => Math.max(12, prev - 2))} className="h-8 w-8 p-0">-</Button>
+                <div className="flex items-center justify-center w-12 text-xs font-bold text-zinc-500">{editorFontSize}px</div>
+                <Button variant="ghost" size="sm" onClick={() => setEditorFontSize(prev => Math.min(32, prev + 2))} className="h-8 w-8 p-0">+</Button>
+              </div>
+              <Button 
+                variant="outline"
+                size="sm"
+                onClick={() => rePaginate(2000)}
+                title="Automatically restructure the book into even pages (approx. 2000 characters per page)"
+                className="border-zinc-200 text-zinc-600 hover:bg-zinc-50 hidden sm:flex"
+              >
+                Auto-Paginate
+              </Button>
+              <Button 
+                variant="outline"
+                size="sm"
+                onClick={autoDetectChapters}
+                disabled={isAutoDetecting}
+                title="AI-assisted detection of chapter titles and automatic bold formatting"
+                className="border-amber-200 text-amber-700 hover:bg-amber-50"
+              >
+                {isAutoDetecting ? (
+                  <Loader2 size={14} className="animate-spin mr-2" />
+                ) : (
+                  <Wand2 size={14} className="mr-2" />
+                )}
+                Auto-Detect Chapters
+              </Button>
+              <Button 
+                onClick={() => setShowApplyConfirm(true)}
+                title="Save and apply all changes to the book structure"
+                className="bg-zinc-900 text-white hover:bg-zinc-800"
+              >
+                <Check size={16} className="mr-2" /> Apply Changes
+              </Button>
+            </div>
+          </header>
+
+          <div className="flex-1 flex overflow-hidden relative">
+            {/* Sidebar with page list */}
+            <div className="w-48 border-r border-zinc-200 bg-zinc-50 overflow-y-auto hidden md:block">
+              <div className="p-3">
+                <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-3">Pages</p>
+                <div className="space-y-1">
+                  {fullText.split('<<LUMINA_PAGE_BREAK>>').map((_, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => jumpToPageMarker(idx + 1)}
+                      className="w-full text-left px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-200 rounded-md transition-colors flex justify-between"
+                    >
+                      <span>Page {idx + 1}</span>
+                      <Type size={10} className="text-zinc-400" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <textarea
+              ref={advancedTextareaRef}
+              value={fullText}
+              onChange={(e) => setFullText(e.target.value)}
+              placeholder="Paste or edit the full book text here..."
+              className={cn(
+                "flex-1 h-full p-8 md:p-12 leading-relaxed focus:outline-none resize-none bg-zinc-100/30 selection:bg-purple-100 custom-scrollbar",
+                textDirection === 'rtl' ? 'text-right' : 'text-left'
+              )}
+              dir={textDirection}
+              style={{ fontSize: `${editorFontSize}px`, fontFamily: 'Inter, system-ui, sans-serif' }}
+            />
+            
+            {/* Mobile Footer (Save/Cancel) */}
+            <div className="sm:hidden fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-zinc-100 flex gap-2">
+              <Button 
+                variant="outline" 
+                className="flex-1"
+                onClick={() => setIsAdvancedEditorOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button 
+                className="flex-1 bg-zinc-900 text-white"
+                onClick={() => setShowApplyConfirm(true)}
+              >
+                Apply
+              </Button>
+            </div>
+          </div>
+
+          {showApplyConfirm && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[300] flex items-center justify-center p-4">
+              <div className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl animate-in fade-in zoom-in duration-200">
+                <div className="bg-amber-100 text-amber-600 w-12 h-12 rounded-2xl flex items-center justify-center mb-6">
+                  <Wand2 size={24} />
+                </div>
+                <h3 className="text-xl font-bold text-zinc-900 mb-3">Confirm Changes</h3>
+                <p className="text-zinc-600 text-sm leading-relaxed mb-8">
+                  Are you sure you want to apply these changes to the book? This will restructure the pages and update the content.
+                </p>
+                <div className="flex flex-col gap-2">
+                  <Button 
+                    onClick={handleApplyAdvancedChanges}
+                    className="w-full bg-zinc-900 text-white hover:bg-zinc-800"
+                  >
+                    Yes, Apply Changes
+                  </Button>
+                  <Button 
+                    variant="ghost"
+                    onClick={() => setShowApplyConfirm(false)}
+                    className="w-full text-zinc-400"
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -963,28 +1285,64 @@ export default function BookOrchestrator() {
           </h2>
           
           {isDramatizedReadingEnabled ? (
-            <div className="p-6 bg-zinc-50 rounded-xl border border-dashed border-zinc-200 flex flex-col items-center text-center">
-              <div className="bg-purple-100 text-purple-600 p-3 rounded-full mb-3">
-                <Sparkles size={24} />
-              </div>
-              <p className="text-sm font-medium text-zinc-900">AI Dramatization is Active</p>
-              <p className="text-xs text-zinc-500 mt-1 max-w-xs">
-                Character voices are automatically identified and assigned by AI. There is no need to manually define them here.
-              </p>
-              {Object.keys(speakerVoices).length > 1 && (
-                <div className="mt-4 flex flex-wrap justify-center gap-2">
-                  {Object.keys(speakerVoices).filter(s => s !== 'Narrator').slice(0, 5).map(s => (
-                    <span key={s} className="px-2 py-1 bg-white border border-zinc-200 rounded-md text-[10px] text-zinc-600 font-medium">
-                      {s}
-                    </span>
-                  ))}
-                  {Object.keys(speakerVoices).length > 6 && (
-                    <span className="px-2 py-1 bg-white border border-zinc-200 rounded-md text-[10px] text-zinc-400">
-                      +{Object.keys(speakerVoices).length - 6} more
-                    </span>
-                  )}
+            <div className="space-y-4">
+              <div className="p-4 bg-purple-50 rounded-xl border border-purple-100 flex items-start gap-3">
+                <div className="bg-purple-100 text-purple-600 p-2 rounded-lg shrink-0">
+                  <Sparkles size={20} />
                 </div>
-              )}
+                <div>
+                  <p className="text-sm font-semibold text-zinc-900 leading-tight">AI Managed Characters</p>
+                  <p className="text-[11px] text-zinc-500 mt-1 max-w-sm">
+                    Characters found by AI are listed below. Assign specific voices to keep them consistent throughout the book.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+                {Object.keys(speakerVoices)
+                  .sort((a, b) => a === 'Narrator' ? -1 : b === 'Narrator' ? 1 : a.localeCompare(b))
+                  .map(speaker => (
+                    <div key={speaker} className="flex flex-col gap-2 p-3 rounded-xl border border-zinc-200 bg-white shadow-sm hover:border-purple-200 transition-colors">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[11px] font-bold text-zinc-700 truncate max-w-[120px] uppercase tracking-wider">
+                          {speaker === 'Narrator' ? 'Narrator' : speaker}
+                        </label>
+                        <span className={cn(
+                          "text-[9px] font-bold px-1.5 py-0.5 rounded-md border",
+                          speakerGenders[speaker] === 'male' ? "bg-blue-50 border-blue-100 text-blue-600" :
+                          speakerGenders[speaker] === 'female' ? "bg-pink-50 border-pink-100 text-pink-600" :
+                          "bg-zinc-50 border-zinc-100 text-zinc-500"
+                        )}>
+                          {speakerGenders[speaker] || 'neutral'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={speakerVoices[speaker] || 'Zephyr'}
+                          onChange={(e) => handleVoiceChange(speaker, e.target.value)}
+                          className="flex-1 px-2 py-1.5 text-xs border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-600 bg-zinc-50"
+                        >
+                          {getAvailableVoices(bookLanguage.toLowerCase() === 'hebrew').map(v => (
+                            <option key={v.id} value={v.id}>{v.name}</option>
+                          ))}
+                        </select>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => previewVoice(speakerVoices[speaker] || 'Zephyr')}
+                          disabled={isPreviewingVoice === (speakerVoices[speaker] || 'Zephyr')}
+                          className="h-8 w-8 p-0 rounded-lg bg-zinc-50 shadow-sm border border-zinc-100 text-zinc-600 hover:text-purple-600"
+                        >
+                          {isPreviewingVoice === (speakerVoices[speaker] || 'Zephyr') ? (
+                            <Loader2 size={12} className="animate-spin" />
+                          ) : (
+                            <Volume2 size={12} />
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+              </div>
             </div>
           ) : (
             <div className="max-w-xs">
@@ -1130,94 +1488,94 @@ export default function BookOrchestrator() {
           </p>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-sm border border-zinc-200 flex-1 flex flex-col min-h-[70vh]">
-          <div className="p-3 bg-zinc-50 border-b border-zinc-200 flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" size="sm" onClick={() => handlePageChange(currentPageIndex - 1)} disabled={currentPageIndex === 0}>
-                <ChevronLeft size={16} />
-              </Button>
-              <span className="text-sm font-medium text-zinc-700">Page {currentPageIndex + 1} of {pages.length}</span>
-              <Button variant="ghost" size="sm" onClick={() => handlePageChange(currentPageIndex + 1)} disabled={currentPageIndex === pages.length - 1}>
-                <ChevronRight size={16} />
-              </Button>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="flex items-center border-r border-zinc-200 pr-2 mr-2">
-                <Button variant="ghost" size="sm" onClick={() => handleFormatText('bold')} title="Bold" className="h-8 w-8 p-0">
-                  <Bold size={14} />
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => handleFormatText('underline')} title="Underline" className="h-8 w-8 p-0">
-                  <Underline size={14} />
-                </Button>
+        {/* Content Editor Entry Point */}
+        <div className="bg-white rounded-2xl shadow-sm border border-zinc-200 p-6 shrink-0 bg-gradient-to-br from-white to-zinc-50/50">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="flex items-start gap-4">
+              <div className="bg-zinc-900 text-white p-3 rounded-2xl shrink-0 shadow-lg shadow-zinc-200">
+                <Edit3 size={24} />
               </div>
-              <Button variant="outline" size="sm" onClick={handleAddPage} className="text-xs h-8">
-                <Plus size={14} className="mr-1" /> Add Page
-              </Button>
-              <Button variant="outline" size="sm" onClick={handleDeletePage} className="text-xs h-8 text-red-600 hover:text-red-700 hover:bg-red-50" disabled={pages.length <= 1}>
-                <Trash size={14} className="mr-1" /> Delete
-              </Button>
-            </div>
-          </div>
-          <div className="px-4 pt-2 pb-0">
-            <p className="text-[11px] text-zinc-500 font-medium">
-              Note: Formatting tags like &lt;&lt;BOLD_START&gt;&gt; will be rendered visually when reading the book.
-            </p>
-          </div>
-          <textarea
-            id="page-editor"
-            value={pages[currentPageIndex] || ''}
-            onChange={(e) => handleContentChange(e.target.value)}
-            dir={textDirection}
-            className="flex-1 w-full p-4 md:p-6 resize-y min-h-[60vh] focus:outline-none focus:ring-0 font-mono text-sm leading-relaxed text-zinc-800"
-            spellCheck={false}
-            placeholder="Enter page content here..."
-          />
-
-          {isDramatizingFullBook && (
-            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
-              <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full text-center">
-                <div className="bg-purple-100 text-purple-600 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6 animate-bounce">
-                  <Sparkles size={32} />
-                </div>
-                <h3 className="text-2xl font-bold text-zinc-900 mb-2">Dramatizing Book</h3>
-                <p className="text-zinc-500 mb-8">
-                  {isWaitingForQuota ? (
-                    <span className="text-amber-600 font-medium flex items-center justify-center gap-2">
-                      <Loader2 size={16} className="animate-spin" />
-                      Gemini API quota reached. Waiting to resume...
-                    </span>
-                  ) : (
-                    "AI is analyzing characters and assigning professional voices. We're moving slowly to stay within API limits. This may take some time depending on the book length..."
-                  )}
+              <div>
+                <h2 className="text-lg font-bold text-zinc-900 leading-tight">Book Content & Structure</h2>
+                <p className="text-sm text-zinc-500 mt-1 max-w-md">
+                  Edit the full text of your book, manage page breaks, and automatically detect chapters using AI-assisted tools.
                 </p>
-                
-                <div className="w-full bg-zinc-100 h-3 rounded-full overflow-hidden mb-4">
-                  <div 
-                    className="bg-purple-600 h-full transition-all duration-500 ease-out"
-                    style={{ width: `${dramatizationProgress}%` }}
-                  />
-                </div>
-                <div className="flex justify-between text-sm font-medium text-zinc-600 mb-8">
-                  <span>Progress</span>
-                  <span>{dramatizationProgress === 100 ? <Check size={18} className="text-emerald-500" /> : `${dramatizationProgress}%`}</span>
-                </div>
-
-                <Button 
-                  variant="outline" 
-                  onClick={() => {
-                    cancelRef.current = true;
-                    setCancelDramatization(true);
-                  }}
-                  disabled={cancelDramatization}
-                  className="w-full py-6 rounded-2xl border-zinc-200 text-zinc-600 hover:bg-zinc-50"
-                >
-                  {cancelDramatization ? 'Cancelling...' : 'Cancel Analysis'}
-                </Button>
               </div>
             </div>
-          )}
+            <Button 
+              onClick={handleOpenAdvancedEditor}
+              className="bg-zinc-900 text-white hover:bg-zinc-800 h-12 px-8 rounded-2xl font-bold transition-all hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-zinc-200"
+            >
+              <Edit3 size={18} className="mr-2" /> Open Advanced Editor
+            </Button>
+          </div>
+          
+          <div className="mt-6 pt-6 border-t border-zinc-100 grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="text-center p-3 rounded-xl bg-white border border-zinc-100">
+              <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-bold mb-1">Total Pages</p>
+              <p className="text-xl font-black text-zinc-900">{pages.length}</p>
+            </div>
+            <div className="text-center p-3 rounded-xl bg-white border border-zinc-100">
+              <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-bold mb-1">Est. Words</p>
+              <p className="text-xl font-black text-zinc-900">{pages.reduce((acc, p) => acc + p.split(/\s+/).length, 0)}</p>
+            </div>
+            <div className="text-center p-3 rounded-xl bg-white border border-zinc-100">
+              <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-bold mb-1">Language</p>
+              <p className="text-xl font-black text-zinc-900">{bookLanguage}</p>
+            </div>
+            <div className="text-center p-3 rounded-xl bg-white border border-zinc-100">
+              <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-bold mb-1">Direction</p>
+              <p className="text-xl font-black text-zinc-900 uppercase">{textDirection}</p>
+            </div>
+          </div>
+        </div>
+      </div>
 
-          {isGeneratingSubtitles && (
+      {isDramatizingFullBook && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[300] p-4">
+          <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full text-center">
+            <div className="bg-purple-100 text-purple-600 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6 animate-bounce">
+              <Sparkles size={32} />
+            </div>
+            <h3 className="text-2xl font-bold text-zinc-900 mb-2">Dramatizing Book</h3>
+            <p className="text-zinc-500 mb-8 leading-relaxed">
+              {isWaitingForQuota ? (
+                <span className="text-amber-600 font-medium flex items-center justify-center gap-2">
+                  <Loader2 size={16} className="animate-spin" />
+                  Gemini API quota reached. Waiting to resume...
+                </span>
+              ) : (
+                "AI is analyzing characters and assigning professional voices. This may take some time depending on the book length..."
+              )}
+            </p>
+            
+            <div className="w-full bg-zinc-100 h-3 rounded-full overflow-hidden mb-4">
+              <div 
+                className="bg-purple-600 h-full transition-all duration-500 ease-out"
+                style={{ width: `${dramatizationProgress}%` }}
+              />
+            </div>
+            <div className="flex justify-between text-sm font-medium text-zinc-600 mb-8">
+              <span>Progress</span>
+              <span>{dramatizationProgress}%</span>
+            </div>
+
+            <Button 
+              variant="outline" 
+              onClick={() => {
+                cancelRef.current = true;
+                setCancelDramatization(true);
+              }}
+              disabled={cancelDramatization}
+              className="w-full py-6 rounded-2xl border-zinc-200 text-zinc-600 hover:bg-zinc-50"
+            >
+              {cancelDramatization ? 'Cancelling...' : 'Cancel Analysis'}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {isGeneratingSubtitles && (
             <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
               <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full text-center">
                 <div className="bg-blue-100 text-blue-600 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6 animate-bounce">
@@ -1304,8 +1662,6 @@ export default function BookOrchestrator() {
               </div>
             </div>
           )}
-        </div>
-      </div>
     </div>
   );
 }

@@ -6,7 +6,7 @@ import { db } from '../lib/db';
 import { Button } from '../components/ui/Button';
 import QuotesPanel from '../components/QuotesPanel';
 import XRayPanel from '../components/XRayPanel';
-import { getDefinition, translateText, generateSpeech, translateSentencesBatch, analyzeBookWithAI, analyzeSpeakers, analyzeSpeakersBatch, generateMultiSpeakerSpeech, translateWordInContext } from '../services/ai';
+import { getDefinition, translateText, generateSpeech, translateSentencesBatch, analyzeBookWithAI, analyzeSpeakers, analyzeSpeakersBatch, generateMultiSpeakerSpeech, translateWordInContext, GEMINI_VOICES } from '../services/ai';
 import { applyKeriKetiv } from '../lib/hebrewUtils';
 import { cn, getCleanText, getSentences } from '../lib/utils';
 
@@ -117,6 +117,7 @@ export default function BookReader() {
   const [selectedText, setSelectedText] = useState('');
   const [aiResult, setAiResult] = useState<{ type: 'def' | 'trans' | null, content: string }>({ type: null, content: '' });
   const [isAiLoading, setIsAiLoading] = useState(false);
+  const [previewingGeminiVoice, setPreviewingGeminiVoice] = useState<string | null>(null);
 
   const [currentSubtitle, setCurrentSubtitle] = useState('');
   const [pageTranslations, setPageTranslations] = useState<string[]>([]);
@@ -124,6 +125,7 @@ export default function BookReader() {
   const [batchTranslationStatus, setBatchTranslationStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [currentSentenceIndex, setCurrentSentenceIndex] = useState<number | null>(null);
   const [currentSegmentIndex, setCurrentSegmentIndex] = useState<number | null>(null);
+  const fallbackRef = useRef<{ index: number, type: 'browser' | 'gemini' } | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [geminiAudioData, setGeminiAudioData] = useState<{ url: string, sentences: string[] } | null>(null);
   const [isTurningPage, setIsTurningPage] = useState(false);
@@ -334,6 +336,24 @@ export default function BookReader() {
       } else {
         isPlayingQueueRef.current = false;
         if (!isPlayingRef.current) return;
+
+        if (fallbackRef.current) {
+          console.log("[TTS] Queue finished, starting fallback reading", fallbackRef.current);
+          const { index, type } = fallbackRef.current;
+          fallbackRef.current = null;
+          
+          if (type === 'browser') {
+            const cleanText = getCleanText(pagesRef.current[currentPageRef.current]);
+            const sentences = getSentences(cleanText);
+            playWithBrowserTTS(sentences, index);
+          } else {
+            const cleanText = getCleanText(pagesRef.current[currentPageRef.current]);
+            const sentences = getSentences(cleanText);
+            playWithGeminiTTS(sentences, index);
+          }
+          return;
+        }
+
         handleEndOfPage();
       }
     };
@@ -425,6 +445,26 @@ export default function BookReader() {
       setHighlightRange(null);
     }
   }, [currentSentenceIndex, currentSegmentIndex, currentPage, pages, book]);
+
+  const handlePreviewGemini = async (voice: string) => {
+    if (!apiKey) {
+      setErrorMessage("API Key required to preview Gemini voices.");
+      return;
+    }
+    setPreviewingGeminiVoice(voice);
+    try {
+      const sampleText = "Hello, this is a sample of the Gemini AI voice.";
+      const base64Audio = await generateSpeech(sampleText, voice, apiKey);
+      const audioUrl = pcmBase64ToWavBase64(base64Audio);
+      const audio = new Audio(audioUrl);
+      audio.play();
+    } catch (err) {
+      console.error("Preview failed", err);
+      setErrorMessage("Failed to preview voice.");
+    } finally {
+      setPreviewingGeminiVoice(null);
+    }
+  };
 
   const loadBook = async (bookId: string) => {
     const b = await db.getBook(bookId);
@@ -539,18 +579,18 @@ export default function BookReader() {
         const newSpeakerGenders = { ...existingGenders, ...(result.speakerGenders || {}) };
         
         // Fallback voice assignment if AI missed some
-        const availableVoices = ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr', 'Aoede'];
         const segmentsWithVoices = result.segments.map((s: any) => {
           let voice = newSpeakerVoices[s.speaker];
           
           if (!voice) {
-            // Suggest based on gender
+            // Suggest based on gender and personality fallback
             const gender = newSpeakerGenders[s.speaker] || 'neutral';
-            if (gender === 'female') voice = 'Zephyr';
-            else if (gender === 'male') voice = 'Charon';
-            else voice = 'Puck';
+            if (gender === 'female') voice = 'Zephyr'; // Soft/Calm
+            else if (gender === 'male') voice = 'Charon'; // Mature
+            else voice = 'Puck'; // Neutral/Playful
             
             newSpeakerVoices[s.speaker] = voice;
+            console.log(`[Dramatizer] Auto-assigned fallback voice ${voice} for ${s.speaker} (${gender})`);
           }
           
           return {
@@ -823,6 +863,9 @@ export default function BookReader() {
       if (effectiveTtsProvider === 'gemini' && audioRef.current) {
         audioRef.current.pause();
       } else if (synthRef.current) {
+        // Chrome bug: synth.pause() can cause problems if canceled later.
+        // For Browser TTS, we'll just stop completely for now to be safe, 
+        // or ensure resume() is called before cancel().
         synthRef.current.pause();
       }
       setIsPlaying(false);
@@ -843,6 +886,7 @@ export default function BookReader() {
           }
         });
       } else if (effectiveTtsProvider === 'browser' && synthRef.current && synthRef.current.paused) {
+        console.log("[TTS] Resuming Browser TTS");
         synthRef.current.resume();
       } else {
         startTTS(currentSentenceIndex !== null ? currentSentenceIndex : 0);
@@ -914,6 +958,8 @@ export default function BookReader() {
         const errStr = err ? (err.message || err.toString() || JSON.stringify(err)) : '';
         if (errStr.includes('400') || errStr.includes('API_KEY_INVALID') || errStr.includes('API key not valid')) {
           setErrorMessage("Invalid Gemini API Key for translation. Please check your settings.");
+        } else if (errStr.includes('404')) {
+          setErrorMessage("Translation model not found (404). Please try again or check API key permissions.");
         }
         setPageTranslations([]);
         setBatchTranslationStatus('error');
@@ -1018,6 +1064,10 @@ export default function BookReader() {
     const effectiveTtsProvider = bookRef.current?.ttsProvider || 'browser';
 
     if (effectiveTtsProvider === 'browser' && synthRef.current) {
+      // Chrome fix: ensure we are not in a paused state when canceling
+      if (synthRef.current.paused) {
+        synthRef.current.resume();
+      }
       synthRef.current.cancel();
     }
     if (effectiveTtsProvider === 'gemini' && audioRef.current) {
@@ -1086,9 +1136,17 @@ export default function BookReader() {
 
     setCurrentSentenceIndex(null);
     const originalSegments = dramatization.pages[pageIndex].segments;
+    
+    // Ensure every segment has a voice, even if it was missed during generation
+    const validSegments = originalSegments.map(s => {
+      if (s.voice) return s;
+      const speakerVoice = speakerVoices[s.speaker] || (targetBook.dramatization?.speakerGenders?.[s.speaker] === 'female' ? 'Zephyr' : (targetBook.dramatization?.speakerGenders?.[s.speaker] === 'male' ? 'Charon' : 'Puck'));
+      return { ...s, voice: speakerVoice };
+    });
+
     const segments = targetBook.keriKetivEnabled !== false && targetBook.language === 'Hebrew'
-      ? originalSegments.map(s => ({ ...s, text: applyKeriKetiv(s.text) }))
-      : originalSegments;
+      ? validSegments.map(s => ({ ...s, text: applyKeriKetiv(s.text) }))
+      : validSegments;
       
     const speakerVoices = dramatization.speakerVoices || {};
     
@@ -1102,6 +1160,8 @@ export default function BookReader() {
 
     setIsTtsLoading(true);
     isGeneratingChunksRef.current = true;
+    let lastEnqueuedSegmentIdx = -1;
+
     try {
       let firstChunkStarted = false;
 
@@ -1111,6 +1171,8 @@ export default function BookReader() {
         speakerVoices,
         (base64, chunkTimings) => {
           const url = pcmBase64ToWavBase64(base64, 24000);
+          lastEnqueuedSegmentIdx = chunkTimings[chunkTimings.length - 1].segmentIdx;
+          
           if (!firstChunkStarted && isPlayingRef.current) {
             firstChunkStarted = true;
             setIsTtsLoading(false);
@@ -1159,7 +1221,33 @@ export default function BookReader() {
     } catch (err) {
       console.error("Dramatized TTS failed", err);
       setIsTtsLoading(false);
-      setErrorMessage("Failed to generate dramatized speech.");
+      
+      const errStr = err ? (err.message || err.toString() || JSON.stringify(err)) : '';
+      const isQuota = errStr.includes('429') || errStr.includes('RESOURCE_EXHAUSTED') || errStr.includes('quota');
+      const isKeyErr = errStr.includes('400') || errStr.includes('API_KEY_INVALID') || errStr.includes('API key not valid');
+      
+      if ((isQuota || isKeyErr) && isPlayingRef.current) {
+        setErrorMessage(isQuota ? "Gemini API quota exceeded. Continuing with automatic browser reading." : "Invalid Gemini API Key. Continuing with automatic browser reading.");
+        
+        const nextSegmentIdx = lastEnqueuedSegmentIdx + 1;
+        const cleanText = getCleanText(pagesRef.current[pageIndex]);
+        const sentences = getSentences(cleanText);
+        
+        let targetSentenceIdx = 0;
+        if (nextSegmentIdx < segments.length) {
+          const nextSegment = segments[nextSegmentIdx];
+          const foundIdx = sentences.findIndex(s => s.includes(nextSegment.text.trim()) || nextSegment.text.includes(s.trim()));
+          if (foundIdx !== -1) targetSentenceIdx = foundIdx;
+        }
+
+        if (lastEnqueuedSegmentIdx === -1) {
+          playWithBrowserTTS(sentences, targetSentenceIdx);
+        } else {
+          fallbackRef.current = { index: targetSentenceIdx, type: 'browser' };
+        }
+      } else {
+        setErrorMessage("Failed to generate dramatized speech.");
+      }
     } finally {
       isGeneratingChunksRef.current = false;
     }
@@ -1181,6 +1269,7 @@ export default function BookReader() {
 
     let isRateLimited = false;
     let localStartIdx = startGlobalIdx > chunks[currentChunkIdx].startIndex ? startGlobalIdx - chunks[currentChunkIdx].startIndex : 0;
+    let nextStartIdx = startGlobalIdx;
 
     // Clear existing queue
     audioQueueRef.current = [];
@@ -1200,11 +1289,11 @@ export default function BookReader() {
         console.error("Failed to fetch audio", e);
         const errStr = e ? (e.message || e.toString() || JSON.stringify(e)) : '';
         if (errStr.includes('429') || errStr.includes('RESOURCE_EXHAUSTED') || errStr.includes('quota')) {
-           isRateLimited = true;
-           setErrorMessage("Gemini API rate limit exceeded. Falling back to browser voice.");
+          isRateLimited = true;
+          setErrorMessage("Gemini API quota exceeded. Continuing with automatic browser reading.");
         } else if (errStr.includes('400') || errStr.includes('API_KEY_INVALID') || errStr.includes('API key not valid')) {
-           isRateLimited = true;
-           setErrorMessage("Invalid Gemini API Key. Please check your settings. Falling back to browser voice.");
+          isRateLimited = true;
+          setErrorMessage("Invalid Gemini API Key. Continuing with automatic browser reading.");
         }
         return null;
       }
@@ -1219,8 +1308,17 @@ export default function BookReader() {
       for (let i = currentChunkIdx; i < chunks.length; i++) {
         if (!isPlayingRef.current || isRateLimited) break;
         
+        nextStartIdx = chunks[i].startIndex;
         const base64 = await fetchAudio(i);
-        if (!base64 || !isPlayingRef.current) break;
+        if (!base64 || !isPlayingRef.current) {
+          if (!base64 && isRateLimited) {
+            // Already set errorMessage in fetchAudio
+          }
+          break;
+        }
+
+        // Successfully fetched, so the NEXT potential skip would be after this chunk
+        nextStartIdx = chunks[i].startIndex + chunks[i].sentences.length;
         
         const url = pcmBase64ToWavBase64(base64, 24000);
         const chunk = chunks[i];
@@ -1277,7 +1375,15 @@ export default function BookReader() {
       }
       
       if (!firstChunkStarted) setIsTtsLoading(false);
-      if (isRateLimited) playWithBrowserTTS(sentences, startGlobalIdx);
+      
+      if (isRateLimited) {
+        if (firstChunkStarted) {
+          console.log(`[TTS] Rate limited mid-page. Queuing fallback to browser TTS from index ${nextStartIdx}`);
+          fallbackRef.current = { index: nextStartIdx, type: 'browser' };
+        } else {
+          playWithBrowserTTS(sentences, nextStartIdx);
+        }
+      }
       
     } catch (err) {
       console.error("Gemini TTS playback failed", err);
@@ -1288,13 +1394,26 @@ export default function BookReader() {
   };
 
   const playWithBrowserTTS = (sentences: string[], startIdx: number) => {
+    const synth = window.speechSynthesis;
+    const availableVoices = synth.getVoices();
+    console.log(`[TTS] Playing with Browser TTS from index ${startIdx}. Available voices: ${availableVoices.length}`);
+    
+    if (!sentences || sentences.length === 0) {
+      console.error("[TTS] playWithBrowserTTS called with no sentences");
+      return;
+    }
+    
     setCurrentSegmentIndex(null);
-    let currentIdx = startIdx;
+    let currentIdx = Math.max(0, Math.min(startIdx, sentences.length - 1));
 
     const playNext = async () => {
-      if (!isPlayingRef.current) return;
+      if (!isPlayingRef.current) {
+        console.log("[TTS] Playback stopped (isPlayingRef is false)");
+        return;
+      }
       
       if (currentIdx >= sentences.length) {
+        console.log("[TTS] End of page reached");
         handleEndOfPage();
         return;
       }
@@ -1320,13 +1439,14 @@ export default function BookReader() {
       utterance.rate = settingsRef.current.ttsSpeed;
       
       const bookVoiceName = book?.ttsVoice || book?.dramatization?.speakerVoices?.['Narrator'];
-      const preferredVoiceName = bookVoiceName || settingsRef.current.ttsVoice;
+      const preferredVoiceName = bookVoiceName || settingsRef.current.browserVoice || settingsRef.current.ttsVoice;
 
       if (preferredVoiceName) {
-        const voices = window.speechSynthesis.getVoices();
-        const selectedVoice = voices.find(v => v.name === preferredVoiceName);
+        const selectedVoice = availableVoices.find(v => v.name === preferredVoiceName);
         if (selectedVoice) {
           utterance.voice = selectedVoice;
+        } else {
+          console.warn("[TTS] Preferred voice not found, using default:", preferredVoiceName);
         }
       }
 
@@ -1341,9 +1461,29 @@ export default function BookReader() {
           'arabic': 'ar-SA'
         };
         utterance.lang = langMap[book.language.toLowerCase()] || book.language;
+      } else {
+        // Fallback to English if book language is unknown
+        utterance.lang = 'en-US';
       }
       
+      let watchdogStarted = false;
+      const watchdog = setTimeout(() => {
+        if (!watchdogStarted && isPlayingRef.current) {
+          console.warn("[TTS] Browser TTS stuck - forcing cancel and retry");
+          synth.cancel();
+          setTimeout(() => playNext(), 100);
+        }
+      }, 5000);
+
+      utterance.onstart = () => {
+        watchdogStarted = true;
+        clearTimeout(watchdog);
+        console.log(`[TTS] Speaking sentence ${currentIdx}: "${sentence.substring(0, 30)}..."`);
+      };
+
       utterance.onend = () => {
+        clearTimeout(watchdog);
+        console.log(`[TTS] Finished sentence ${currentIdx}`);
         if (!isPlayingRef.current) return;
         currentIdx++;
         if (currentIdx >= sentences.length) {
@@ -1353,8 +1493,22 @@ export default function BookReader() {
         }
       };
 
+      utterance.onerror = (e) => {
+        clearTimeout(watchdog);
+        console.error("[TTS] Utterance error:", e);
+        if (isPlayingRef.current) {
+          currentIdx++;
+          setTimeout(() => playNext(), 200);
+        }
+      };
+
       utteranceRef.current = utterance;
-      synthRef.current?.speak(utterance);
+      if (synth.speaking || synth.pending) {
+        synth.cancel();
+        setTimeout(() => synth.speak(utterance), 50);
+      } else {
+        synth.speak(utterance);
+      }
     };
 
     playNext();
@@ -1381,6 +1535,7 @@ export default function BookReader() {
     audioQueueRef.current = [];
     isPlayingQueueRef.current = false;
     isGeneratingChunksRef.current = false;
+    fallbackRef.current = null;
     
     // Save current progress before stopping
     saveProgress(currentPageRef.current, currentSentenceIndex);
@@ -2348,7 +2503,9 @@ export default function BookReader() {
                   </div>
                   <div>
                     <h3 className="font-bold text-zinc-900 dark:text-white">Voice Settings</h3>
-                    <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-bold">Browser Text-to-Speech</p>
+                    <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-bold">
+                      {(book.ttsProvider || 'browser') === 'gemini' ? 'Gemini AI Voice Engine' : 'Browser Text-to-Speech'}
+                    </p>
                   </div>
                 </div>
                 <button 
@@ -2379,36 +2536,171 @@ export default function BookReader() {
                 </div>
 
                 <div>
+                  <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">
+                    TTS Provider
+                  </label>
+                  <div className="flex bg-zinc-100 dark:bg-zinc-800 p-1 rounded-2xl gap-1">
+                    <button
+                      onClick={() => {
+                        updateBook(book.id, { ttsProvider: 'browser' });
+                        setBook({ ...book, ttsProvider: 'browser' });
+                      }}
+                      className={cn(
+                        "flex-1 py-1.5 px-4 rounded-xl text-[10px] font-bold uppercase tracking-wider transition-all",
+                        (book.ttsProvider || 'browser') === 'browser' 
+                          ? "bg-white dark:bg-zinc-700 text-purple-600 shadow-sm"
+                          : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                      )}
+                    >
+                      Browser
+                    </button>
+                    <button
+                      onClick={() => {
+                        updateBook(book.id, { ttsProvider: 'gemini' });
+                        setBook({ ...book, ttsProvider: 'gemini' });
+                      }}
+                      className={cn(
+                        "flex-1 py-1.5 px-4 rounded-xl text-[10px] font-bold uppercase tracking-wider transition-all",
+                        (book.ttsProvider || 'browser') === 'gemini' 
+                          ? "bg-white dark:bg-zinc-700 text-purple-600 shadow-sm"
+                          : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                      )}
+                    >
+                      Gemini AI
+                    </button>
+                  </div>
+                </div>
+
+                <div>
                   <div className="flex items-center justify-between mb-3">
                     <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest">
                       Select Voice
                     </label>
-                    <span className="text-[10px] bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 px-2 py-0.5 rounded-full font-bold">
-                      Book Lang: {book.language || 'Auto'}
-                    </span>
+                    {(book.ttsProvider || 'browser') === 'browser' && (
+                      <span className="text-[10px] bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 px-2 py-0.5 rounded-full font-bold">
+                        Book Lang: {book.language || 'Auto'}
+                      </span>
+                    )}
                   </div>
                   
                   <div className="space-y-2">
-                    {/* Suggested Voices */}
-                    {availableVoices.filter(v => {
-                      const bookLang = (book.language || '').toLowerCase();
-                      if (bookLang.includes('hebrew')) return v.lang.startsWith('he');
-                      if (bookLang.includes('english')) return v.lang.startsWith('en');
-                      if (bookLang.includes('spanish')) return v.lang.startsWith('es');
-                      if (bookLang.includes('french')) return v.lang.startsWith('fr');
-                      return false;
-                    }).length > 0 && (
-                      <div className="mb-4">
-                        <p className="text-[9px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest mb-2 px-1">Suggested for this book</p>
+                    {/* Gemini Voices */}
+                    {(book.ttsProvider || 'browser') === 'gemini' && (
+                      <div className="space-y-1">
+                         {GEMINI_VOICES.map(voice => (
+                           <div 
+                            key={voice}
+                            className={cn(
+                              "flex items-center justify-between p-3 rounded-2xl cursor-pointer transition-all border group",
+                              (book.geminiVoice === voice || (!book.geminiVoice && settings.geminiVoice === voice))
+                                ? "bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800" 
+                                : "bg-white dark:bg-zinc-800 border-zinc-100 dark:border-zinc-700 hover:border-zinc-200"
+                            )}
+                            onClick={() => {
+                              updateBook(book.id, { geminiVoice: voice as any });
+                              setBook({ ...book, geminiVoice: voice as any });
+                            }}
+                          >
+                            <div className="min-w-0">
+                              <p className={cn(
+                                "text-sm font-semibold truncate",
+                                (book.geminiVoice === voice || (!book.geminiVoice && settings.geminiVoice === voice)) ? "text-purple-700 dark:text-purple-300" : "text-zinc-700 dark:text-zinc-300"
+                              )}>{voice}</p>
+                              <p className="text-[10px] text-zinc-400">High Quality Neural Voice</p>
+                            </div>
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handlePreviewGemini(voice);
+                              }}
+                              disabled={previewingGeminiVoice !== null}
+                              className="p-2 hover:bg-purple-100 dark:hover:bg-purple-800 rounded-full text-purple-600 transition-colors disabled:opacity-50"
+                              title="Preview Voice"
+                            >
+                              {previewingGeminiVoice === voice ? (
+                                <Loader2 size={14} className="animate-spin" />
+                              ) : (
+                                <Play size={14} fill="currentColor" />
+                              )}
+                            </button>
+                          </div>
+                         ))}
+                      </div>
+                    )}
+
+                    {/* Browser Voices */}
+                    {(book.ttsProvider || 'browser') === 'browser' && (
+                      <>
+                        {availableVoices.filter(v => {
+                          const bookLang = (book.language || '').toLowerCase();
+                          if (bookLang.includes('hebrew')) return v.lang.startsWith('he');
+                          if (bookLang.includes('english')) return v.lang.startsWith('en');
+                          if (bookLang.includes('spanish')) return v.lang.startsWith('es');
+                          if (bookLang.includes('french')) return v.lang.startsWith('fr');
+                          return false;
+                        }).length > 0 && (
+                          <div className="mb-4">
+                            <p className="text-[9px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest mb-2 px-1">Suggested for this book</p>
+                            <div className="space-y-1">
+                              {availableVoices.filter(v => {
+                                const bookLang = (book.language || '').toLowerCase();
+                                if (bookLang.includes('hebrew')) return v.lang.startsWith('he');
+                                if (bookLang.includes('english')) return v.lang.startsWith('en');
+                                if (bookLang.includes('spanish')) return v.lang.startsWith('es');
+                                if (bookLang.includes('french')) return v.lang.startsWith('fr');
+                                return false;
+                              }).map(voice => (
+                                <div 
+                                  key={voice.name}
+                                  className={cn(
+                                    "flex items-center justify-between p-3 rounded-2xl cursor-pointer transition-all border group",
+                                    (book.ttsVoice === voice.name || (!book.ttsVoice && settings.ttsVoice === voice.name))
+                                      ? "bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800" 
+                                      : "bg-white dark:bg-zinc-800 border-zinc-100 dark:border-zinc-700 hover:border-zinc-200"
+                                  )}
+                                  onClick={() => {
+                                    updateBook(book.id, { ttsVoice: voice.name });
+                                    setBook({ ...book, ttsVoice: voice.name });
+                                  }}
+                                >
+                                  <div className="min-w-0">
+                                    <p className={cn(
+                                      "text-sm font-semibold truncate",
+                                      (book.ttsVoice === voice.name || (!book.ttsVoice && settings.ttsVoice === voice.name)) ? "text-purple-700 dark:text-purple-300" : "text-zinc-700 dark:text-zinc-300"
+                                    )}>{voice.name}</p>
+                                    <p className="text-[10px] text-zinc-400">{voice.lang}</p>
+                                  </div>
+                                  <button 
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      window.speechSynthesis.cancel();
+                                      const samples: Record<string, string> = {
+                                        'he': 'שלום, זהו קול הבדיקה שלי.',
+                                        'en': 'Hello, this is my test voice.',
+                                        'es': 'Hola, esta es mi voz de prueba.',
+                                        'fr': 'Bonjour, c\'est ma voix de test.',
+                                      };
+                                      const langPrefix = voice.lang.split('-')[0].toLowerCase();
+                                      const text = samples[langPrefix] || samples['en'];
+                                      const utterance = new SpeechSynthesisUtterance(text);
+                                      utterance.voice = voice;
+                                      utterance.rate = settings.ttsSpeed;
+                                      window.speechSynthesis.speak(utterance);
+                                    }}
+                                    className="p-2 hover:bg-purple-100 dark:hover:bg-purple-800 rounded-full text-purple-600 transition-colors"
+                                    title="Preview Voice"
+                                  >
+                                    <Play size={14} fill="currentColor" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <p className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest mb-2 px-1">All available voices</p>
                         <div className="space-y-1">
-                          {availableVoices.filter(v => {
-                            const bookLang = (book.language || '').toLowerCase();
-                            if (bookLang.includes('hebrew')) return v.lang.startsWith('he');
-                            if (bookLang.includes('english')) return v.lang.startsWith('en');
-                            if (bookLang.includes('spanish')) return v.lang.startsWith('es');
-                            if (bookLang.includes('french')) return v.lang.startsWith('fr');
-                            return false;
-                          }).map(voice => (
+                          {availableVoices.map(voice => (
                             <div 
                               key={voice.name}
                               className={cn(
@@ -2454,57 +2746,8 @@ export default function BookReader() {
                             </div>
                           ))}
                         </div>
-                      </div>
+                      </>
                     )}
-
-                    <p className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest mb-2 px-1">All available voices</p>
-                    <div className="space-y-1">
-                      {availableVoices.map(voice => (
-                        <div 
-                          key={voice.name}
-                          className={cn(
-                            "flex items-center justify-between p-3 rounded-2xl cursor-pointer transition-all border group",
-                            (book.ttsVoice === voice.name || (!book.ttsVoice && settings.ttsVoice === voice.name))
-                              ? "bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800" 
-                              : "bg-white dark:bg-zinc-800 border-zinc-100 dark:border-zinc-700 hover:border-zinc-200"
-                          )}
-                          onClick={() => {
-                            updateBook(book.id, { ttsVoice: voice.name });
-                            setBook({ ...book, ttsVoice: voice.name });
-                          }}
-                        >
-                          <div className="min-w-0">
-                            <p className={cn(
-                              "text-sm font-semibold truncate",
-                              (book.ttsVoice === voice.name || (!book.ttsVoice && settings.ttsVoice === voice.name)) ? "text-purple-700 dark:text-purple-300" : "text-zinc-700 dark:text-zinc-300"
-                            )}>{voice.name}</p>
-                            <p className="text-[10px] text-zinc-400">{voice.lang}</p>
-                          </div>
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              window.speechSynthesis.cancel();
-                              const samples: Record<string, string> = {
-                                'he': 'שלום, זהו קול הבדיקה שלי.',
-                                'en': 'Hello, this is my test voice.',
-                                'es': 'Hola, esta es mi voz de prueba.',
-                                'fr': 'Bonjour, c\'est ma voix de test.',
-                              };
-                              const langPrefix = voice.lang.split('-')[0].toLowerCase();
-                              const text = samples[langPrefix] || samples['en'];
-                              const utterance = new SpeechSynthesisUtterance(text);
-                              utterance.voice = voice;
-                              utterance.rate = settings.ttsSpeed;
-                              window.speechSynthesis.speak(utterance);
-                            }}
-                            className="p-2 hover:bg-purple-100 dark:hover:bg-purple-800 rounded-full text-purple-600 transition-colors"
-                            title="Preview Voice"
-                          >
-                            <Play size={14} fill="currentColor" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
                   </div>
                 </div>
               </div>
