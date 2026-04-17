@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Play, Pause, SkipBack, SkipForward, Settings as SettingsIcon, X, BookOpen, Languages, Search, ChevronLeft, ChevronRight, MessageSquare, Zap, Highlighter, Captions, Sparkles, Moon, Sun, Loader2, MoreVertical, Check } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Settings as SettingsIcon, X, BookOpen, Languages, Search, ChevronLeft, ChevronRight, MessageSquare, Zap, Highlighter, Captions, Sparkles, Moon, Sun, Loader2, MoreVertical, Check, Volume2 } from 'lucide-react';
 import { useStore, Book } from '../store/useStore';
 import { db } from '../lib/db';
 import { Button } from '../components/ui/Button';
@@ -89,6 +89,7 @@ export default function BookReader() {
   const [pages, setPages] = useState<string[]>([]);
   const [currentPage, setCurrentPage] = useState(0);
   
+  const [showTtsSettings, setShowTtsSettings] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isTtsLoading, setIsTtsLoading] = useState(false);
   const [isImmersive, setIsImmersive] = useState(false);
@@ -1318,7 +1319,7 @@ export default function BookReader() {
       const utterance = new SpeechSynthesisUtterance(sentence);
       utterance.rate = settingsRef.current.ttsSpeed;
       
-      const bookVoiceName = book?.dramatization?.speakerVoices?.['Narrator'];
+      const bookVoiceName = book?.ttsVoice || book?.dramatization?.speakerVoices?.['Narrator'];
       const preferredVoiceName = bookVoiceName || settingsRef.current.ttsVoice;
 
       if (preferredVoiceName) {
@@ -1893,6 +1894,33 @@ export default function BookReader() {
                       <MessageSquare size={16} className={showQuotes ? "text-blue-500" : "text-zinc-400"} />
                       <span>Quotes</span>
                     </button>
+                    <button 
+                      onClick={() => { 
+                        if (!book) return;
+                        const newValue = !book.isDramatizedReadingEnabled;
+                        updateBook(book.id, { isDramatizedReadingEnabled: newValue });
+                        db.updateBookField(book.id, 'isDramatizedReadingEnabled', newValue);
+                        setBook({ ...book, isDramatizedReadingEnabled: newValue });
+                        setShowMoreMenu(false); 
+                      }}
+                      className={cn(
+                        "w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors",
+                        settings.theme === 'dark' ? "hover:bg-zinc-700 text-zinc-300" : "hover:bg-zinc-50 text-zinc-700"
+                      )}
+                    >
+                      <Sparkles size={16} className={book?.isDramatizedReadingEnabled ? "text-emerald-500" : "text-zinc-400"} />
+                      <span>{book?.isDramatizedReadingEnabled ? 'Disable AI Voices' : 'Enable AI Voices'}</span>
+                    </button>
+                    <button 
+                      onClick={() => { setShowTtsSettings(true); setShowMoreMenu(false); }}
+                      className={cn(
+                        "w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors",
+                        settings.theme === 'dark' ? "hover:bg-zinc-700 text-zinc-300" : "hover:bg-zinc-50 text-zinc-700"
+                      )}
+                    >
+                      <Volume2 size={16} className="text-zinc-400" />
+                      <span>Voice Settings</span>
+                    </button>
                     <div className={cn("h-px my-1", settings.theme === 'dark' ? "bg-zinc-700" : "bg-zinc-100")} />
                     <button 
                       onClick={() => { updateSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' }); setShowMoreMenu(false); }}
@@ -2132,15 +2160,125 @@ export default function BookReader() {
                 <X size={20} />
               </button>
             </div>
-            <div className="p-6 overflow-y-auto flex-1">
+            <div className="p-6 overflow-y-auto flex-1 custom-scrollbar">
               {isAnalyzingSummary ? (
                 <div className="flex flex-col items-center justify-center h-40 text-zinc-500 gap-3">
                   <div className="w-6 h-6 border-2 border-zinc-300 border-t-purple-500 rounded-full animate-spin" />
                   <p className="text-sm">Analyzing book content...</p>
                 </div>
               ) : (
-                <div className="prose prose-sm prose-zinc">
-                  <p className="leading-relaxed text-zinc-700">{summaryText || book?.analysis?.summary}</p>
+                <div className="space-y-8">
+                  {/* Summary */}
+                  {(summaryText || book?.analysis?.summary) && (
+                    <section className="animate-in fade-in slide-in-from-bottom-2 duration-500">
+                      <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-[0.2em] mb-3 flex items-center gap-2">
+                        <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
+                        Summary
+                      </h4>
+                      <p className="leading-relaxed text-zinc-700 text-sm whitespace-pre-wrap">{summaryText || book?.analysis?.summary}</p>
+                    </section>
+                  )}
+
+                  {/* Characters */}
+                  {book?.analysis?.characters && book.analysis.characters.length > 0 && (
+                    <section className="animate-in fade-in slide-in-from-bottom-2 duration-500 delay-100">
+                      <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-[0.2em] mb-3 flex items-center gap-2">
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                        Characters
+                      </h4>
+                      <div className="space-y-3">
+                        {book.analysis.characters.map((char: any, idx: number) => (
+                          <div key={idx} className="bg-zinc-50/80 p-3 rounded-2xl border border-zinc-100 hover:border-zinc-200 transition-colors group">
+                            <div className="flex justify-between items-start mb-1.5">
+                              <span className="font-bold text-zinc-900 text-sm group-hover:text-purple-600 transition-colors">{char.name}</span>
+                              <span className="text-[9px] bg-zinc-200 text-zinc-600 px-1.5 py-0.5 rounded-md uppercase font-bold tracking-wider">{char.role}</span>
+                            </div>
+                            <p className="text-xs text-zinc-600 leading-relaxed font-light">{char.description}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  {/* Themes */}
+                  {book?.analysis?.themes && book.analysis.themes.length > 0 && (
+                    <section className="animate-in fade-in slide-in-from-bottom-2 duration-500 delay-200">
+                      <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-[0.2em] mb-3 flex items-center gap-2">
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+                        Themes
+                      </h4>
+                      <div className="flex flex-wrap gap-2">
+                        {book.analysis.themes.map((theme: string, idx: number) => (
+                          <span key={idx} className="text-[11px] bg-purple-50 text-purple-700 px-3 py-1.5 rounded-full border border-purple-100 font-medium">
+                            {theme}
+                          </span>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  {/* Glossary */}
+                  {book?.analysis?.glossary && book.analysis.glossary.length > 0 && (
+                    <section className="animate-in fade-in slide-in-from-bottom-2 duration-500 delay-300">
+                      <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-[0.2em] mb-3 flex items-center gap-2">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                        Unique Terms
+                      </h4>
+                      <div className="space-y-4">
+                        {book.analysis.glossary.map((it: any, idx: number) => (
+                          <div key={idx} className="group">
+                            <div className="font-bold text-zinc-900 text-sm mb-0.5 group-hover:text-purple-600 transition-colors">{it.term}</div>
+                            <div className="text-xs text-zinc-500 leading-relaxed font-light">{it.definition}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  {/* Dramatization Status */}
+                  <section className="animate-in fade-in slide-in-from-bottom-2 duration-500 delay-[400ms]">
+                    <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-[0.2em] mb-3 flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                      Dramatization
+                    </h4>
+                    <div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100">
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="text-xs font-semibold text-emerald-800">Status</span>
+                        <span className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-bold">
+                          {book.dramatization?.pages ? Object.keys(book.dramatization.pages).length : 0} / {pages.length} Pages
+                        </span>
+                      </div>
+                      <div className="w-full bg-emerald-100 h-1.5 rounded-full overflow-hidden mb-4">
+                        <div 
+                          className="bg-emerald-500 h-full transition-all duration-1000" 
+                          style={{ width: `${Math.round(((book.dramatization?.pages ? Object.keys(book.dramatization.pages).length : 0) / pages.length) * 100)}%` }} 
+                        />
+                      </div>
+                      {(!book.dramatization?.pages || Object.keys(book.dramatization.pages).length < pages.length) && (
+                        <Button 
+                          variant="primary" 
+                          size="sm" 
+                          className="w-full bg-emerald-600 hover:bg-emerald-700 h-9 rounded-xl text-xs gap-2"
+                          onClick={() => { setShowDramatizeConfirm(true); setShowSummary(false); }}
+                        >
+                          <Sparkles size={14} />
+                          Dramatize Full Book
+                        </Button>
+                      )}
+                    </div>
+                  </section>
+
+                  {!isAnalyzingSummary && !summaryText && !book?.analysis?.summary && (
+                    <div className="flex flex-col items-center justify-center py-12 text-center">
+                      <div className="bg-zinc-100 p-4 rounded-full mb-4">
+                        <Sparkles size={24} className="text-zinc-300" />
+                      </div>
+                      <p className="text-sm text-zinc-500 mb-6">No analysis results yet.</p>
+                      <Button variant="primary" size="sm" onClick={handleAnalyzeSummary}>
+                        Start AI Analysis
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -2196,6 +2334,192 @@ export default function BookReader() {
           </div>
         )}
 
+        {/* TTS Settings Modal */}
+        {showTtsSettings && book && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+            <div className={cn(
+              "w-full max-w-md rounded-3xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200",
+              settings.theme === 'dark' ? "bg-zinc-900 border border-zinc-800" : "bg-white"
+            )}>
+              <div className="p-6 border-b border-zinc-100 dark:border-zinc-800 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-purple-50 dark:bg-purple-900/30 rounded-xl">
+                    <Volume2 className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-zinc-900 dark:text-white">Voice Settings</h3>
+                    <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-bold">Browser Text-to-Speech</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => {
+                    window.speechSynthesis.cancel();
+                    setShowTtsSettings(false);
+                  }} 
+                  className="text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-6 max-h-[60vh] overflow-y-auto custom-scrollbar">
+                <div>
+                  <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">
+                    Speaking Speed ({settings.ttsSpeed}x)
+                  </label>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="2.5"
+                    step="0.1"
+                    value={settings.ttsSpeed}
+                    onChange={(e) => updateSettings({ ttsSpeed: parseFloat(e.target.value) })}
+                    className="w-full accent-purple-600"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest">
+                      Select Voice
+                    </label>
+                    <span className="text-[10px] bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 px-2 py-0.5 rounded-full font-bold">
+                      Book Lang: {book.language || 'Auto'}
+                    </span>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    {/* Suggested Voices */}
+                    {availableVoices.filter(v => {
+                      const bookLang = (book.language || '').toLowerCase();
+                      if (bookLang.includes('hebrew')) return v.lang.startsWith('he');
+                      if (bookLang.includes('english')) return v.lang.startsWith('en');
+                      if (bookLang.includes('spanish')) return v.lang.startsWith('es');
+                      if (bookLang.includes('french')) return v.lang.startsWith('fr');
+                      return false;
+                    }).length > 0 && (
+                      <div className="mb-4">
+                        <p className="text-[9px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest mb-2 px-1">Suggested for this book</p>
+                        <div className="space-y-1">
+                          {availableVoices.filter(v => {
+                            const bookLang = (book.language || '').toLowerCase();
+                            if (bookLang.includes('hebrew')) return v.lang.startsWith('he');
+                            if (bookLang.includes('english')) return v.lang.startsWith('en');
+                            if (bookLang.includes('spanish')) return v.lang.startsWith('es');
+                            if (bookLang.includes('french')) return v.lang.startsWith('fr');
+                            return false;
+                          }).map(voice => (
+                            <div 
+                              key={voice.name}
+                              className={cn(
+                                "flex items-center justify-between p-3 rounded-2xl cursor-pointer transition-all border group",
+                                (book.ttsVoice === voice.name || (!book.ttsVoice && settings.ttsVoice === voice.name))
+                                  ? "bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800" 
+                                  : "bg-white dark:bg-zinc-800 border-zinc-100 dark:border-zinc-700 hover:border-zinc-200"
+                              )}
+                              onClick={() => {
+                                updateBook(book.id, { ttsVoice: voice.name });
+                                setBook({ ...book, ttsVoice: voice.name });
+                              }}
+                            >
+                              <div className="min-w-0">
+                                <p className={cn(
+                                  "text-sm font-semibold truncate",
+                                  (book.ttsVoice === voice.name || (!book.ttsVoice && settings.ttsVoice === voice.name)) ? "text-purple-700 dark:text-purple-300" : "text-zinc-700 dark:text-zinc-300"
+                                )}>{voice.name}</p>
+                                <p className="text-[10px] text-zinc-400">{voice.lang}</p>
+                              </div>
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  window.speechSynthesis.cancel();
+                                  const samples: Record<string, string> = {
+                                    'he': 'שלום, זהו קול הבדיקה שלי.',
+                                    'en': 'Hello, this is my test voice.',
+                                    'es': 'Hola, esta es mi voz de prueba.',
+                                    'fr': 'Bonjour, c\'est ma voix de test.',
+                                  };
+                                  const langPrefix = voice.lang.split('-')[0].toLowerCase();
+                                  const text = samples[langPrefix] || samples['en'];
+                                  const utterance = new SpeechSynthesisUtterance(text);
+                                  utterance.voice = voice;
+                                  utterance.rate = settings.ttsSpeed;
+                                  window.speechSynthesis.speak(utterance);
+                                }}
+                                className="p-2 hover:bg-purple-100 dark:hover:bg-purple-800 rounded-full text-purple-600 transition-colors"
+                                title="Preview Voice"
+                              >
+                                <Play size={14} fill="currentColor" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <p className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest mb-2 px-1">All available voices</p>
+                    <div className="space-y-1">
+                      {availableVoices.map(voice => (
+                        <div 
+                          key={voice.name}
+                          className={cn(
+                            "flex items-center justify-between p-3 rounded-2xl cursor-pointer transition-all border group",
+                            (book.ttsVoice === voice.name || (!book.ttsVoice && settings.ttsVoice === voice.name))
+                              ? "bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800" 
+                              : "bg-white dark:bg-zinc-800 border-zinc-100 dark:border-zinc-700 hover:border-zinc-200"
+                          )}
+                          onClick={() => {
+                            updateBook(book.id, { ttsVoice: voice.name });
+                            setBook({ ...book, ttsVoice: voice.name });
+                          }}
+                        >
+                          <div className="min-w-0">
+                            <p className={cn(
+                              "text-sm font-semibold truncate",
+                              (book.ttsVoice === voice.name || (!book.ttsVoice && settings.ttsVoice === voice.name)) ? "text-purple-700 dark:text-purple-300" : "text-zinc-700 dark:text-zinc-300"
+                            )}>{voice.name}</p>
+                            <p className="text-[10px] text-zinc-400">{voice.lang}</p>
+                          </div>
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              window.speechSynthesis.cancel();
+                              const samples: Record<string, string> = {
+                                'he': 'שלום, זהו קול הבדיקה שלי.',
+                                'en': 'Hello, this is my test voice.',
+                                'es': 'Hola, esta es mi voz de prueba.',
+                                'fr': 'Bonjour, c\'est ma voix de test.',
+                              };
+                              const langPrefix = voice.lang.split('-')[0].toLowerCase();
+                              const text = samples[langPrefix] || samples['en'];
+                              const utterance = new SpeechSynthesisUtterance(text);
+                              utterance.voice = voice;
+                              utterance.rate = settings.ttsSpeed;
+                              window.speechSynthesis.speak(utterance);
+                            }}
+                            className="p-2 hover:bg-purple-100 dark:hover:bg-purple-800 rounded-full text-purple-600 transition-colors"
+                            title="Preview Voice"
+                          >
+                            <Play size={14} fill="currentColor" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-6 bg-zinc-50 dark:bg-zinc-800/50 border-t border-zinc-100 dark:border-zinc-800">
+                <Button 
+                  onClick={() => setShowTtsSettings(false)} 
+                  className="w-full bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 rounded-2xl h-12 font-bold"
+                >
+                  Apply Settings
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
         {/* AI Modal Overlay */}
         {aiResult.type && (
           <div className="fixed top-20 right-4 md:right-8 w-[calc(100%-2rem)] md:w-80 bg-white rounded-2xl shadow-xl border border-zinc-200 p-5 z-50 animate-in fade-in slide-in-from-top-4">

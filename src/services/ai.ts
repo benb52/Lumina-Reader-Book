@@ -398,6 +398,26 @@ const repairJson = (jsonStr: string) => {
     const char = repaired[i];
     
     if (char === '"' && !escaped) {
+      // Check if this quote is likely an unescaped quote inside a string
+      // An unescaped quote is likely if it's not followed by , } ] : or whitespace
+      if (inString) {
+        let isRealEnd = false;
+        for (let j = i + 1; j < repaired.length; j++) {
+          if (/\s/.test(repaired[j])) continue;
+          if ([',', '}', ']', ':'].includes(repaired[j])) {
+            isRealEnd = true;
+          }
+          break;
+        }
+        // If it's the very last character, it's also likely the real end
+        if (i === repaired.length - 1) isRealEnd = true;
+
+        if (!isRealEnd) {
+          result += '\\"'; // Escape the likely internal quote
+          continue;
+        }
+      }
+
       inString = !inString;
       result += char;
     } else if (inString) {
@@ -437,6 +457,18 @@ const repairJson = (jsonStr: string) => {
   result = result.trim();
   while (result.endsWith(',') || result.endsWith(':')) {
     result = result.slice(0, -1).trim();
+  }
+  
+  // If we ended mid-object-key, we need to add a dummy value or remove the key
+  // e.g. {"key" -> adds } -> {"key"} (invalid). 
+  // Let's try to detect if we ended right after a quote that was a key.
+  if (result.endsWith('"') && stack[stack.length - 1] === '}') {
+    // Check if there's a colon before this last string
+    const lastQuote = result.lastIndexOf('"', result.length - 2);
+    const slice = result.substring(lastQuote);
+    if (!slice.includes(':')) {
+        result += ': null';
+    }
   }
   
   while (stack.length > 0) {
@@ -523,12 +555,12 @@ export const analyzeSpeakersBatch = async (pages: { index: number, text: string 
           11. Detect the gender of each character (male, female, or neutral).
           12. DO NOT repeat the same text multiple times. Ensure the segments exactly reconstruct the original text.
           13. Keep the JSON response as compact as possible.
-          13. DO NOT include any text outside of the JSON structure.
-          14. Each segment's text must be a verbatim excerpt from the original text.
-          15. IMPORTANT: Combine consecutive segments spoken by the same character into a single segment to keep the JSON response small.
-          16. The total number of segments per page should be kept to a minimum (ideally under 20).
-          17. Ensure all double quotes inside the text are properly escaped as \\" in the JSON.
-          18. Ensure there are no literal newlines inside the JSON strings; use \\n instead.
+          14. DO NOT include any text outside of the JSON structure.
+          15. Each segment's text must be a verbatim excerpt from the original text.
+          16. IMPORTANT: Combine consecutive segments spoken by the same character into a single segment to keep the JSON response small.
+          17. The total number of segments per page should be kept to a minimum (ideally under 20).
+          18. Ensure all double quotes inside the text are properly escaped as \\" in the JSON.
+          19. Ensure there are no literal newlines inside the JSON strings; use \\n instead.
           ${hebrewGuidance}
           
           Existing character voices to maintain consistency: ${JSON.stringify({ Narrator: 'Zephyr', ...existingSpeakerVoices })}
@@ -636,6 +668,8 @@ export const analyzeSpeakers = async (text: string, apiKey: string, existingSpea
     10. Detect the gender of each character (male, female, or neutral).
     11. DO NOT repeat the same text multiple times. Ensure the segments exactly reconstruct the original text.
     12. Keep the JSON response as compact as possible.
+    13. Ensure all double quotes inside the text are properly escaped as \\" in the JSON.
+    14. Ensure there are no literal newlines inside the JSON strings; use \\n instead.
     ${hebrewGuidance}
     
     Existing character voices to maintain consistency: ${JSON.stringify({ Narrator: 'Zephyr', ...existingSpeakerVoices })}

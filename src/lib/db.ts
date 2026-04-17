@@ -261,12 +261,42 @@ export const db = {
     const userId = auth.currentUser?.uid;
     if (!userId) return;
 
-    // Save locally
+    // Save locally (IndexedDB has no 1MB limit)
     await set(`book-${userId}-${book.id}`, book);
     
-    // Save to Firebase (Everything in Firestore now)
+    // Save to Firebase (Handle Firestore 1MB document limit)
     try {
-      await setDoc(doc(firestore, `users/${userId}/books`, book.id), book);
+      const bookJson = JSON.stringify(book);
+      const CHUNK_SIZE = 800 * 1024; // 800KB chunks
+      const isLarge = bookJson.length > CHUNK_SIZE;
+
+      if (isLarge) {
+        // Store skeleton metadata
+        const skeleton = {
+          ...book,
+          content: '', // Clear large fields to stay under limit
+          dramatization: { pages: {}, speakerVoices: book.dramatization?.speakerVoices || {} },
+          isChunked: true,
+          chunkCount: Math.ceil(bookJson.length / CHUNK_SIZE),
+          lastUpdated: Date.now()
+        };
+        
+        await setDoc(doc(firestore, `users/${userId}/books`, book.id), skeleton);
+        
+        // Split and save chunks in subcollection
+        const totalChunks = skeleton.chunkCount;
+        const chunkPromises = [];
+        for (let i = 0; i < totalChunks; i++) {
+          const chunk = bookJson.substring(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+          chunkPromises.push(setDoc(doc(firestore, `users/${userId}/books/${book.id}/chunks`, i.toString()), {
+            index: i,
+            data: chunk
+          }));
+        }
+        await Promise.all(chunkPromises);
+      } else {
+        await setDoc(doc(firestore, `users/${userId}/books`, book.id), { ...book, isChunked: false });
+      }
       appStore.getState().setIsFirestoreOffline(false);
     } catch (error: any) {
       if (error.code === 'permission-denied' || error.code === 'unavailable') {
@@ -287,20 +317,9 @@ export const db = {
     if (book) {
       const updatedBook = { ...book, [field]: value };
       await set(`book-${userId}-${bookId}`, updatedBook);
-    }
-
-    // Update Firebase
-    try {
-      const bookRef = doc(firestore, `users/${userId}/books`, bookId);
-      await setDoc(bookRef, { [field]: value }, { merge: true });
-      appStore.getState().setIsFirestoreOffline(false);
-    } catch (error: any) {
-      if (error.code === 'permission-denied' || error.code === 'unavailable') {
-        console.warn(`Firebase permission denied or offline. Field ${field} updated locally only.`);
-        if (error.code === 'unavailable') appStore.getState().setIsFirestoreOffline(true);
-      } else {
-        console.error(`Error updating book field ${field}:`, error);
-      }
+      
+      // Use saveBook as it handles the document limit correctly
+      await this.saveBook(updatedBook);
     }
   },
   
@@ -322,7 +341,21 @@ export const db = {
       const docSnap = await getDoc(docRef);
       
       if (docSnap.exists()) {
-        book = docSnap.data() as Book;
+        const data = docSnap.data();
+        if (data.isChunked) {
+          // Fetch chunks
+          const q = query(
+            collection(firestore, `users/${userId}/books/${id}/chunks`),
+            orderBy('index', 'asc')
+          );
+          const chunkSnap = await getDocs(q);
+          const chunks: string[] = [];
+          chunkSnap.forEach((c) => chunks.push(c.data().data));
+          const fullJson = chunks.join('');
+          book = JSON.parse(fullJson) as Book;
+        } else {
+          book = data as Book;
+        }
         
         // Cache locally
         await set(`book-${userId}-${id}`, book);

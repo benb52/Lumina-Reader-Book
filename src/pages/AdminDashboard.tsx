@@ -149,11 +149,11 @@ export default function AdminDashboard() {
   const totalBooks = users.reduce((sum, u) => sum + u.bookCount, 0);
 
   return (
-    <div className="p-4 md:p-8 max-w-7xl mx-auto w-full flex flex-col gap-8 h-full overflow-y-auto">
+    <div className="p-4 md:p-8 max-w-7xl mx-auto w-full flex flex-col gap-8 pb-12">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-zinc-900 mb-2">Admin Dashboard</h1>
-          <p className="text-zinc-500">System overview and user statistics.</p>
+          <p className="text-zinc-500 text-sm md:text-base">System overview and user statistics.</p>
         </div>
         <div className="flex items-center gap-3">
           <Button 
@@ -168,7 +168,8 @@ export default function AdminDashboard() {
           </Button>
           <div className="flex items-center gap-2 px-4 py-2 bg-zinc-900 text-white rounded-xl text-sm font-medium">
             <Shield size={16} />
-            Administrator Access
+            <span className="hidden sm:inline">Administrator Access</span>
+            <span className="sm:hidden">Admin</span>
           </div>
         </div>
       </div>
@@ -179,8 +180,8 @@ export default function AdminDashboard() {
             <Database size={24} />
           </div>
           <div>
-            <p className="text-sm font-medium text-zinc-500">Database Location</p>
-            <p className="text-lg font-semibold text-zinc-900">Firebase Firestore</p>
+            <p className="text-sm font-medium text-zinc-500">Database</p>
+            <p className="text-lg font-semibold text-zinc-900">Firestore</p>
           </div>
         </div>
         <div className="bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm flex items-center gap-4">
@@ -197,102 +198,104 @@ export default function AdminDashboard() {
             <BookOpen size={24} />
           </div>
           <div>
-            <p className="text-sm font-medium text-zinc-500">Total Books Across Platform</p>
+            <p className="text-sm font-medium text-zinc-500">Total Books</p>
             <p className="text-2xl font-bold text-zinc-900">{totalBooks}</p>
           </div>
         </div>
       </div>
 
       <div className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-zinc-200 flex items-center justify-between">
+        <div className="p-6 border-b border-zinc-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <h2 className="text-lg font-semibold text-zinc-900">User Management</h2>
-          <div className="flex items-center gap-2 text-xs text-zinc-500">
+          <div className="flex items-center gap-2 text-[10px] md:text-xs text-zinc-500">
             <Activity size={14} />
-            Real-time usage tracking enabled
+            <span>Tracking {totalUsers} users</span>
           </div>
         </div>
-        <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
-          <table className="w-full text-left text-sm text-zinc-600 relative">
-            <thead className="bg-zinc-50 text-zinc-500 border-b border-zinc-200 sticky top-0 z-10">
-              <tr>
-                <th className="px-6 py-4 font-medium">User</th>
-                <th className="px-6 py-4 font-medium">API Status</th>
-                <th className="px-6 py-4 font-medium">Usage / Limit</th>
-                <th className="px-6 py-4 font-medium">Books</th>
-                <th className="px-6 py-4 font-medium">Last Login</th>
-                <th className="px-6 py-4 font-medium text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-200">
-              {users.map((u) => (
-                <tr key={u.uid} className="hover:bg-zinc-50/50 transition-colors">
-                  <td className="px-6 py-4">
-                    <div className="flex flex-col">
-                      <span className="font-medium text-zinc-900">{u.name}</span>
-                      <span className="text-xs text-zinc-400">{u.email}</span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    {u.isApiKeyManaged ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 text-[10px] font-bold uppercase tracking-wider border border-blue-100">
-                        <Shield size={10} />
-                        Managed
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600 text-[10px] font-bold uppercase tracking-wider border border-zinc-200">
-                        <Users size={10} />
-                        Personal
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4">
-                    {u.isApiKeyManaged ? (
-                      <div className="flex flex-col gap-1.5 w-32">
-                        <div className="flex items-center justify-between text-[10px] font-bold text-zinc-500">
-                          <span>{u.apiKeyUsage || 0}</span>
-                          <span>{u.apiKeyLimit || 0}</span>
-                        </div>
-                        <div className="h-1.5 bg-zinc-100 rounded-full overflow-hidden">
-                          <div 
-                            className={`h-full transition-all duration-500 ${
-                              (u.apiKeyUsage || 0) >= (u.apiKeyLimit || 0) ? 'bg-red-500' : 'bg-blue-500'
-                            }`}
-                            style={{ width: `${Math.min(100, ((u.apiKeyUsage || 0) / (u.apiKeyLimit || 1)) * 100)}%` }}
-                          />
-                        </div>
-                      </div>
-                    ) : (
-                      <span className="text-zinc-400 italic text-xs">N/A</span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-100 text-zinc-700 font-medium">
-                      <BookOpen size={14} />
-                      {u.bookCount}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-xs">
-                    {u.lastLogin ? new Date(u.lastLogin).toLocaleString() : 'Never'}
-                  </td>
-                  <td className="px-6 py-4 text-right">
-                    <button 
-                      onClick={() => handleEditUser(u)}
-                      className="p-2 text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 rounded-lg transition-colors"
-                    >
-                      <SettingsIcon size={18} />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {users.length === 0 && (
+        <div className="overflow-x-auto w-full">
+          <div className="inline-block min-w-full align-middle">
+            <table className="min-w-full text-left text-sm text-zinc-600">
+              <thead className="bg-zinc-50 text-zinc-500 border-b border-zinc-200">
                 <tr>
-                  <td colSpan={6} className="px-6 py-8 text-center text-zinc-500">
-                    No users found.
-                  </td>
+                  <th className="px-6 py-4 font-medium whitespace-nowrap">User</th>
+                  <th className="px-6 py-4 font-medium whitespace-nowrap">API Status</th>
+                  <th className="px-6 py-4 font-medium whitespace-nowrap">Usage / Limit</th>
+                  <th className="px-6 py-4 font-medium whitespace-nowrap">Books</th>
+                  <th className="px-6 py-4 font-medium whitespace-nowrap">Last Login</th>
+                  <th className="px-6 py-4 font-medium text-right whitespace-nowrap">Actions</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-zinc-200">
+                {users.map((u) => (
+                  <tr key={u.uid} className="hover:bg-zinc-50/50 transition-colors">
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex flex-col">
+                        <span className="font-medium text-zinc-900">{u.name}</span>
+                        <span className="text-xs text-zinc-400">{u.email}</span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {u.isApiKeyManaged ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 text-[10px] font-bold uppercase tracking-wider border border-blue-100">
+                          <Shield size={10} />
+                          Managed
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600 text-[10px] font-bold uppercase tracking-wider border border-zinc-200">
+                          <Users size={10} />
+                          Personal
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {u.isApiKeyManaged ? (
+                        <div className="flex flex-col gap-1.5 w-32">
+                          <div className="flex items-center justify-between text-[10px] font-bold text-zinc-500">
+                            <span>{u.apiKeyUsage || 0}</span>
+                            <span>{u.apiKeyLimit || 0}</span>
+                          </div>
+                          <div className="h-1.5 bg-zinc-100 rounded-full overflow-hidden">
+                            <div 
+                              className={`h-full transition-all duration-500 ${
+                                (u.apiKeyUsage || 0) >= (u.apiKeyLimit || 0) ? 'bg-red-500' : 'bg-blue-500'
+                              }`}
+                              style={{ width: `${Math.min(100, ((u.apiKeyUsage || 0) / (u.apiKeyLimit || 1)) * 100)}%` }}
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-zinc-400 italic text-xs">N/A</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-100 text-zinc-700 font-medium">
+                        <BookOpen size={14} />
+                        {u.bookCount}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-xs whitespace-nowrap">
+                      {u.lastLogin ? new Date(u.lastLogin).toLocaleString() : 'Never'}
+                    </td>
+                    <td className="px-6 py-4 text-right whitespace-nowrap">
+                      <button 
+                        onClick={() => handleEditUser(u)}
+                        className="p-2 text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 rounded-lg transition-colors"
+                      >
+                        <SettingsIcon size={18} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {users.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-8 text-center text-zinc-500">
+                      No users found.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -303,16 +306,16 @@ export default function AdminDashboard() {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden border border-zinc-200"
+              className="bg-white w-full max-w-md max-h-[90vh] rounded-2xl md:rounded-3xl shadow-2xl overflow-hidden border border-zinc-200 flex flex-col"
             >
-              <div className="p-6 border-b border-zinc-100 flex items-center justify-between bg-zinc-50/50">
+              <div className="p-5 md:p-6 border-b border-zinc-100 flex items-center justify-between bg-zinc-50/50 shrink-0">
                 <div className="flex items-center gap-3">
                   <div className="bg-blue-50 text-blue-600 p-2 rounded-xl">
                     <Key size={20} />
                   </div>
                   <div>
-                    <h3 className="text-lg font-bold text-zinc-900">Manage API Key</h3>
-                    <p className="text-xs text-zinc-500">{editingUser.email}</p>
+                    <h3 className="text-base md:text-lg font-bold text-zinc-900 leading-tight">Manage API Key</h3>
+                    <p className="text-[10px] md:text-xs text-zinc-500 truncate max-w-[180px] md:max-w-xs">{editingUser.email}</p>
                   </div>
                 </div>
                 <button 
@@ -323,7 +326,7 @@ export default function AdminDashboard() {
                 </button>
               </div>
 
-              <div className="p-6 space-y-6">
+              <div className="p-5 md:p-6 space-y-6 flex-1 overflow-y-auto min-h-0 custom-scrollbar">
                 <div className="flex items-center justify-between p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
                   <div>
                     <p className="text-sm font-bold text-zinc-900">Enable Managed Key</p>
@@ -357,7 +360,7 @@ export default function AdminDashboard() {
                             type="password"
                             value={managedKey}
                             onChange={(e) => setManagedKey(e.target.value)}
-                            className="w-full px-4 py-3 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                            className="w-full px-4 py-3 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-sm"
                             placeholder="AIzaSy..."
                           />
                           <Key size={18} className="absolute right-4 top-1/2 -translate-y-1/2 text-zinc-300" />
@@ -372,14 +375,14 @@ export default function AdminDashboard() {
                           type="number"
                           value={limit}
                           onChange={(e) => setLimit(parseInt(e.target.value))}
-                          className="w-full px-4 py-3 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                          className="w-full px-4 py-3 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-sm"
                           min="1"
                         />
                       </div>
 
                       <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 flex gap-3">
                         <AlertCircle size={18} className="text-amber-600 mt-0.5 flex-shrink-0" />
-                        <p className="text-xs text-amber-700 leading-relaxed">
+                        <p className="text-[10px] md:text-xs text-amber-700 leading-relaxed">
                           When enabled, the user will not be able to see or change their own API key in their settings. 
                           All their AI requests will use the key provided above.
                         </p>
@@ -389,16 +392,16 @@ export default function AdminDashboard() {
                 </AnimatePresence>
               </div>
 
-              <div className="p-6 bg-zinc-50/50 border-t border-zinc-100 flex gap-3">
+              <div className="p-5 md:p-6 bg-zinc-50/50 border-t border-zinc-100 flex gap-3 shrink-0">
                 <Button 
                   variant="outline" 
-                  className="flex-1"
+                  className="flex-1 text-sm h-11"
                   onClick={() => setEditingUser(null)}
                 >
                   Cancel
                 </Button>
                 <Button 
-                  className="flex-1"
+                  className="flex-1 text-sm h-11"
                   onClick={handleSaveSettings}
                   disabled={isSaving || saveSuccess}
                 >

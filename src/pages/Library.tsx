@@ -407,14 +407,6 @@ export default function Library() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6 md:mb-8">
         <div className="flex flex-col">
           <h1 className="text-2xl md:text-3xl font-semibold tracking-tight text-zinc-900">My Library</h1>
-          <div className="flex items-center gap-2 mt-1">
-            <p className="text-sm md:text-base text-zinc-500">Your personal collection of books and documents.</p>
-            {user?.email && (
-              <span className="text-[10px] bg-zinc-100 text-zinc-500 px-2 py-0.5 rounded-full font-mono">
-                {user.email}
-              </span>
-            )}
-          </div>
         </div>
         
         <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
@@ -538,7 +530,12 @@ export default function Library() {
                 {/* Spine texture */}
                 <div className="absolute left-0 top-0 bottom-0 w-2 bg-gradient-to-r from-black/10 to-transparent z-10" />
                 
-                {!book.coverUrl && (
+                {book.coverUrl ? (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-4 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-300 z-10">
+                    <h3 className="font-serif font-bold text-white line-clamp-3 text-sm md:text-base leading-tight mb-2">{book.title}</h3>
+                    <p className="text-[10px] md:text-xs text-zinc-200 font-medium uppercase tracking-wider line-clamp-2">{book.author}</p>
+                  </div>
+                ) : (
                   <div className="flex-1 p-4 flex flex-col items-center justify-center text-center z-10">
                     <BookOpen size={24} className="text-zinc-400 mb-3 opacity-50" />
                     <h3 className="font-serif font-bold text-zinc-800 line-clamp-3 text-sm md:text-base leading-tight mb-2">{book.title}</h3>

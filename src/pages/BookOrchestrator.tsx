@@ -809,25 +809,7 @@ export default function BookOrchestrator() {
               <label htmlFor="keriKetiv" className="text-sm text-zinc-600 cursor-pointer">Keri/Ketiv Correction</label>
             </div>
           )}
-          <Button 
-            variant="outline" 
-            onClick={() => setShowDramatizeConfirm(true)} 
-            disabled={isDramatizingFullBook || isSaving}
-            className={cn(
-              "flex-1 sm:flex-none justify-center border-purple-200 text-purple-700 hover:bg-purple-50",
-              isDramatizingFullBook && "animate-pulse"
-            )}
-          >
-            <Sparkles size={16} className="mr-2" /> 
-            {isDramatizingFullBook 
-              ? (dramatizationProgress === 100 ? <span className="flex items-center gap-1">Dramatized <Check size={14} /></span> : `Dramatizing (${dramatizationProgress}%)`)
-              : existingProgress > 0 && existingProgress < 100 
-                ? `Continue Dramatization (${existingProgress}%)` 
-                : (existingProgress === 100 || (book.dramatization?.pages && Object.keys(book.dramatization.pages).length === pages.length))
-                  ? <span className="flex items-center gap-1">Redo Dramatization <Check size={14} className="text-emerald-500" /></span>
-                  : 'Dramatize Book (AI)'}
-          </Button>
-          <Button variant="outline" onClick={() => navigate(`/book/${book.id}`)} className="flex-1 sm:flex-none justify-center">
+          <Button variant="outline" onClick={() => navigate('/')} className="flex-1 sm:flex-none justify-center">
             <X size={16} className="mr-2" /> Cancel
           </Button>
           <Button onClick={handleSave} disabled={isSaving} className="flex-1 sm:flex-none justify-center">
@@ -873,20 +855,63 @@ export default function BookOrchestrator() {
               />
             </div>
           </div>
-          <div className="mt-4 pt-4 border-t border-zinc-100 flex items-center justify-between">
+          <div className="mt-4 pt-4 border-t border-zinc-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex flex-col">
-              <span className="text-sm font-medium text-zinc-900">Dramatized Reading (AI)</span>
-              <span className="text-xs text-zinc-500">Use different voices for different characters in this book.</span>
+              <span className="text-sm font-bold text-zinc-900 flex items-center gap-2">
+                <Sparkles size={16} className="text-purple-600" />
+                Dramatized Reading (AI)
+              </span>
+              <span className="text-xs text-zinc-500 font-light">Use unique voices for characters and narrators.</span>
             </div>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input 
-                type="checkbox" 
-                className="sr-only peer" 
-                checked={isDramatizedReadingEnabled}
-                onChange={(e) => setIsDramatizedReadingEnabled(e.target.checked)}
-              />
-              <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
-            </label>
+            
+            <div className="flex items-center gap-3">
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={() => {
+                  setShowDramatizeConfirm(true);
+                  if (!isDramatizedReadingEnabled) setIsDramatizedReadingEnabled(true);
+                }} 
+                disabled={isDramatizingFullBook || isSaving}
+                className={cn(
+                  "border-purple-200 text-purple-700 hover:bg-purple-50 min-w-[160px] h-10 rounded-xl font-semibold",
+                  isDramatizingFullBook && "animate-pulse"
+                )}
+              >
+                {isDramatizingFullBook ? (
+                  <span className="flex items-center gap-2">
+                    <Loader2 size={14} className="animate-spin" />
+                    {dramatizationProgress}%
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-2">
+                    <Sparkles size={14} />
+                    {existingProgress > 0 && existingProgress < 100 
+                      ? `Continue (${existingProgress}%)` 
+                      : (existingProgress === 100 || (book.dramatization?.pages && Object.keys(book.dramatization.pages).length === pages.length))
+                        ? 'Redo Analysis'
+                        : 'Dramatize Book'}
+                  </span>
+                )}
+              </Button>
+
+              <div className="h-8 w-px bg-zinc-200 hidden sm:block mx-1" />
+
+              <div className="flex items-center gap-2">
+                <span className={cn("text-xs font-bold uppercase tracking-wider", isDramatizedReadingEnabled ? "text-purple-600" : "text-zinc-400")}>
+                  {isDramatizedReadingEnabled ? 'Enabled' : 'Disabled'}
+                </span>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    className="sr-only peer" 
+                    checked={isDramatizedReadingEnabled}
+                    onChange={(e) => setIsDramatizedReadingEnabled(e.target.checked)}
+                  />
+                  <div className="w-11 h-6 bg-zinc-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                </label>
+              </div>
+            </div>
           </div>
         </div>
 

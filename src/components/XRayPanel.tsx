@@ -75,10 +75,24 @@ export default function XRayPanel({
               </h3>
               <div className="space-y-3">
                 {data.characters?.map((char, i) => (
-                  <div key={i} className="bg-zinc-50 p-3 rounded-xl border border-zinc-100">
-                    <div className="font-medium text-zinc-900 text-sm">{char.name}</div>
-                    <div className="text-xs text-zinc-500 mb-1">{char.role}</div>
-                    <div className="text-xs text-zinc-600 leading-relaxed">{char.description}</div>
+                  <div key={i} className="bg-zinc-50 p-3 rounded-xl border border-zinc-100 group">
+                    <div className="flex items-start justify-between mb-1">
+                      <div>
+                        <div className="font-medium text-zinc-900 text-sm">{char.name}</div>
+                        <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">{char.role}</div>
+                      </div>
+                      {onUpdateVoice && (
+                        <select 
+                          value={data.speakerVoices?.[char.name] || ''} 
+                          onChange={(e) => onUpdateVoice(char.name, e.target.value)}
+                          className="text-[10px] bg-white border border-zinc-200 rounded px-1.5 py-1 outline-none focus:ring-1 focus:ring-purple-500 max-w-[100px]"
+                        >
+                          <option value="">No Voice</option>
+                          {voices.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+                        </select>
+                      )}
+                    </div>
+                    <div className="text-xs text-zinc-600 leading-relaxed font-light">{char.description}</div>
                   </div>
                 ))}
               </div>

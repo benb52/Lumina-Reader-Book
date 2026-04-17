@@ -30,6 +30,7 @@ export interface Book {
   ttsProvider?: 'browser' | 'gemini';
   aiChunkSizeMultiplier?: number;
   geminiVoice?: 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' | 'Aoede' | 'Orpheus' | 'Cassiopeia';
+  ttsVoice?: string;
   subtitleLanguage?: string;
   isSubtitleTranslationEnabled?: boolean;
   subtitles?: {
@@ -87,6 +88,7 @@ export interface AppSettings {
   fontSize: number;
   fontFamily: string;
   ttsSpeed: number;
+  ttsVoice?: string;
   dailyGoalPages: number;
   apiKey: string;
   highlightStyle: 'yellow-bg' | 'underline' | 'bold' | 'text-blue' | 'character-based';
