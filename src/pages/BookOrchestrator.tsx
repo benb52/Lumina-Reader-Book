@@ -1397,43 +1397,80 @@ export default function BookOrchestrator() {
               </div>
             </div>
           ) : (
-            <div className="max-w-xs">
-              <label className="text-xs font-medium text-zinc-700 mb-1.5 block">Select Voice for this Book</label>
-              <div className="flex items-center gap-3">
-                <select
-                  value={speakerVoices['Narrator'] || (ttsProvider === 'gemini' ? 'Zephyr' : '')}
-                  onChange={(e) => handleVoiceChange('Narrator', e.target.value)}
-                  className="flex-1 px-3 py-2 text-sm border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white"
+            <div className="w-full">
+              <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3 block">Voice for this Book</label>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                <div 
+                  className={cn(
+                    "flex items-center justify-between p-3 rounded-2xl border cursor-pointer transition-all",
+                    !speakerVoices['Narrator']
+                      ? "bg-purple-50 border-purple-200 dark:bg-purple-900/20 dark:border-purple-800" 
+                      : "bg-white border-zinc-200 hover:border-zinc-300 dark:bg-zinc-800 dark:border-zinc-700"
+                  )}
+                  onClick={() => handleVoiceChange('Narrator', '')}
                 >
-                  {ttsProvider === 'gemini' ? (
-                    getAvailableVoices(bookLanguage.toLowerCase() === 'hebrew').map(v => (
-                      <option key={v.id} value={v.id}>{v.name} ({v.description})</option>
+                  <div className="min-w-0 pr-2">
+                    <p className={cn("text-sm font-semibold truncate", !speakerVoices['Narrator'] ? 'text-purple-700 dark:text-purple-300' : 'text-zinc-700 dark:text-zinc-300')}>Global Default</p>
+                    <p className="text-[10px] text-zinc-500">Uses settings from your profile</p>
+                  </div>
+                </div>
+
+                {ttsProvider === 'gemini' ? (
+                  getAvailableVoices(bookLanguage.toLowerCase() === 'hebrew').map(v => (
+                    <div 
+                      key={v.id}
+                      className={cn(
+                        "flex items-center justify-between p-3 rounded-2xl border cursor-pointer transition-all",
+                        speakerVoices['Narrator'] === v.id ? 'bg-purple-50 border-purple-200 dark:bg-purple-900/20 dark:border-purple-800' : 'bg-white border-zinc-200 hover:border-zinc-300 dark:bg-zinc-800 dark:border-zinc-700'
+                      )}
+                      onClick={() => handleVoiceChange('Narrator', v.id)}
+                    >
+                      <div className="min-w-0 pr-2">
+                        <p className={cn("text-sm font-semibold truncate", speakerVoices['Narrator'] === v.id ? 'text-purple-700 dark:text-purple-300' : 'text-zinc-700 dark:text-zinc-300')}>{v.name}</p>
+                        <p className="text-[10px] text-zinc-500">{v.description}</p>
+                      </div>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          previewVoice(v.id);
+                        }}
+                        className="p-2 hover:bg-purple-100 dark:hover:bg-purple-800 rounded-full text-purple-600 disabled:opacity-50"
+                        disabled={isPreviewingVoice !== null}
+                      >
+                        {isPreviewingVoice === v.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Volume2 className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  ))
+                ) : (
+                  availableBrowserVoices
+                    .filter(v => bookLanguage.toLowerCase() === 'hebrew' ? v.lang.startsWith('he') : true)
+                    .map(v => (
+                      <div 
+                        key={v.name}
+                        className={cn(
+                          "flex items-center justify-between p-3 rounded-2xl border cursor-pointer transition-all",
+                          speakerVoices['Narrator'] === v.name ? 'bg-purple-50 border-purple-200 dark:bg-purple-900/20 dark:border-purple-800' : 'bg-white border-zinc-200 hover:border-zinc-300 dark:bg-zinc-800 dark:border-zinc-700'
+                        )}
+                        onClick={() => handleVoiceChange('Narrator', v.name)}
+                      >
+                        <div className="min-w-0 pr-2">
+                          <p className={cn("text-sm font-semibold truncate", speakerVoices['Narrator'] === v.name ? 'text-purple-700 dark:text-purple-300' : 'text-zinc-700 dark:text-zinc-300')}>{v.name}</p>
+                          <p className="text-[10px] text-zinc-500">{v.lang}</p>
+                        </div>
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            previewVoice(v.name);
+                          }}
+                          className="p-2 hover:bg-purple-100 dark:hover:bg-purple-800 rounded-full text-purple-600 disabled:opacity-50"
+                          disabled={isPreviewingVoice !== null}
+                        >
+                          {isPreviewingVoice === v.name ? <Loader2 className="w-4 h-4 animate-spin" /> : <Volume2 className="w-4 h-4" />}
+                        </button>
+                      </div>
                     ))
-                  ) : (
-                    <>
-                      <option value="">Default Browser Voice</option>
-                      {availableBrowserVoices
-                        .filter(v => bookLanguage.toLowerCase() === 'hebrew' ? v.lang.startsWith('he') : true)
-                        .map(v => (
-                          <option key={v.name} value={v.name}>{v.name}</option>
-                        ))
-                      }
-                    </>
-                  )}
-                </select>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => previewVoice(speakerVoices['Narrator'] || 'Zephyr')}
-                  disabled={isPreviewingVoice === (speakerVoices['Narrator'] || 'Zephyr')}
-                  className="h-9 w-9 p-0 rounded-lg bg-white shadow-sm border border-zinc-100 hover:bg-purple-50 hover:text-purple-600 transition-all"
-                >
-                  {isPreviewingVoice === (speakerVoices['Narrator'] || 'Zephyr') ? (
-                    <Loader2 size={14} className="animate-spin" />
-                  ) : (
-                    <Volume2 size={14} />
-                  )}
-                </Button>
+                )}
               </div>
             </div>
           )}

@@ -41,6 +41,7 @@ import { db } from '../lib/db';
 import { auth } from '../lib/firebase';
 import { updatePassword } from 'firebase/auth';
 import { useNavigate } from 'react-router-dom';
+import { cn } from '../lib/utils';
 
 export default function Settings() {
   const navigate = useNavigate();
@@ -88,6 +89,25 @@ export default function Settings() {
       setLocalName(user.name);
     }
   }, [user]);
+
+  const handlePreviewBrowser = (voiceName: string) => {
+    window.speechSynthesis.cancel();
+    const voice = voices.find(v => v.name === voiceName);
+    if (!voice) return;
+    
+    const samples: Record<string, string> = {
+      'he': 'שלום, זהו קול הבדיקה שלי.',
+      'en': 'Hello, this is my test voice.',
+      'es': 'Hola, esta es mi voz de prueba.',
+      'fr': 'Bonjour, c\'est ma voix de test.',
+    };
+    const langPrefix = voice.lang.split('-')[0].toLowerCase();
+    const text = samples[langPrefix] || samples['en'];
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.voice = voice;
+    utterance.rate = localSettings.ttsSpeed;
+    window.speechSynthesis.speak(utterance);
+  };
 
   const handleSave = async () => {
     updateSettings(localSettings);
@@ -436,18 +456,21 @@ export default function Settings() {
 
             {localSettings.ttsProvider === 'gemini' ? (
               <div className="col-span-full">
-                <label className="block text-sm font-medium text-zinc-700 mb-2">
+                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">
                   Gemini AI Voice (Global Default)
                 </label>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {GEMINI_VOICES.map(voice => (
                     <div 
                       key={voice}
-                      className={`flex items-center justify-between p-3 rounded-2xl border cursor-pointer transition-all ${localSettings.geminiVoice === voice ? 'bg-purple-50 border-purple-200' : 'bg-white border-zinc-200 hover:border-zinc-300'}`}
+                      className={cn(
+                        "flex items-center justify-between p-3 rounded-2xl border cursor-pointer transition-all",
+                        localSettings.geminiVoice === voice ? 'bg-purple-50 border-purple-200 dark:bg-purple-900/20 dark:border-purple-800' : 'bg-white border-zinc-200 hover:border-zinc-300 dark:bg-zinc-800 dark:border-zinc-700'
+                      )}
                       onClick={() => setLocalSettings({ ...localSettings, geminiVoice: voice as any })}
                     >
                       <div>
-                        <p className={`text-sm font-semibold ${localSettings.geminiVoice === voice ? 'text-purple-700' : 'text-zinc-700'}`}>{voice}</p>
+                        <p className={cn("text-sm font-semibold", localSettings.geminiVoice === voice ? 'text-purple-700 dark:text-purple-300' : 'text-zinc-700 dark:text-zinc-300')}>{voice}</p>
                         <p className="text-[10px] text-zinc-500">Neural Engine</p>
                       </div>
                       <button 
@@ -455,7 +478,7 @@ export default function Settings() {
                           e.stopPropagation();
                           handlePreviewGemini(voice);
                         }}
-                        className="p-2 hover:bg-purple-100 rounded-full text-purple-600 disabled:opacity-50"
+                        className="p-2 hover:bg-purple-100 dark:hover:bg-purple-800 rounded-full text-purple-600 disabled:opacity-50"
                         disabled={previewingVoice !== null}
                       >
                         {previewingVoice === voice ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" fill="currentColor" />}
@@ -465,22 +488,50 @@ export default function Settings() {
                 </div>
               </div>
             ) : (
-              <div>
-                <label className="block text-sm font-medium text-zinc-700 mb-1">
+              <div className="col-span-full">
+                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">
                   Browser Voice (Global Default)
                 </label>
-                <select
-                  value={localSettings.ttsVoice || ''}
-                  onChange={(e) => setLocalSettings({ ...localSettings, ttsVoice: e.target.value })}
-                  className="w-full px-4 py-2.5 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-zinc-900 bg-white disabled:bg-zinc-50 disabled:cursor-not-allowed"
-                >
-                  <option value="">Default System Voice</option>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[400px] overflow-y-auto p-1 custom-scrollbar">
+                  <div 
+                    className={cn(
+                      "flex items-center justify-between p-3 rounded-2xl border cursor-pointer transition-all",
+                      !localSettings.ttsVoice ? 'bg-purple-50 border-purple-200 dark:bg-purple-900/20 dark:border-purple-800' : 'bg-white border-zinc-200 hover:border-zinc-300 dark:bg-zinc-800 dark:border-zinc-700'
+                    )}
+                    onClick={() => setLocalSettings({ ...localSettings, ttsVoice: '' })}
+                  >
+                    <div>
+                      <p className={cn("text-sm font-semibold", !localSettings.ttsVoice ? 'text-purple-700 dark:text-purple-300' : 'text-zinc-700 dark:text-zinc-300')}>System Default</p>
+                      <p className="text-[10px] text-zinc-500">OS Preferred Voice</p>
+                    </div>
+                  </div>
                   {filteredVoices.map(v => (
-                    <option key={v.name} value={v.name}>{v.name} ({v.lang})</option>
+                    <div 
+                      key={v.name}
+                      className={cn(
+                        "flex items-center justify-between p-3 rounded-2xl border cursor-pointer transition-all",
+                        localSettings.ttsVoice === v.name ? 'bg-purple-50 border-purple-200 dark:bg-purple-900/20 dark:border-purple-800' : 'bg-white border-zinc-200 hover:border-zinc-300 dark:bg-zinc-800 dark:border-zinc-700'
+                      )}
+                      onClick={() => setLocalSettings({ ...localSettings, ttsVoice: v.name })}
+                    >
+                      <div className="min-w-0 pr-2">
+                        <p className={cn("text-sm font-semibold truncate", localSettings.ttsVoice === v.name ? 'text-purple-700 dark:text-purple-300' : 'text-zinc-700 dark:text-zinc-300')}>{v.name}</p>
+                        <p className="text-[10px] text-zinc-500">{v.lang}</p>
+                      </div>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handlePreviewBrowser(v.name);
+                        }}
+                        className="p-2 hover:bg-purple-100 dark:hover:bg-purple-800 rounded-full text-purple-600"
+                      >
+                        <Play className="w-4 h-4" fill="currentColor" />
+                      </button>
+                    </div>
                   ))}
-                </select>
+                </div>
                 {filteredVoices.length === 0 && (
-                  <p className="text-xs text-amber-600 mt-1">No {localSettings.aiLanguage === 'he' ? 'Hebrew' : localSettings.aiLanguage === 'es' ? 'Spanish' : 'English'} voices found on your system.</p>
+                  <p className="text-xs text-amber-600 mt-2 px-2">No {localSettings.aiLanguage === 'he' ? 'Hebrew' : localSettings.aiLanguage === 'es' ? 'Spanish' : 'English'} voices found on your system.</p>
                 )}
               </div>
             )}

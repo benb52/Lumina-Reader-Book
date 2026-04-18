@@ -2587,12 +2587,33 @@ export default function BookReader() {
                     {/* Gemini Voices */}
                     {(book.ttsProvider || 'browser') === 'gemini' && (
                       <div className="space-y-1">
+                         <div 
+                          className={cn(
+                            "flex items-center justify-between p-3 rounded-2xl cursor-pointer transition-all border group",
+                            !book.geminiVoice
+                              ? "bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800" 
+                              : "bg-white dark:bg-zinc-800 border-zinc-100 dark:border-zinc-700 hover:border-zinc-200"
+                          )}
+                          onClick={() => {
+                            updateBook(book.id, { geminiVoice: undefined });
+                            setBook({ ...book, geminiVoice: undefined });
+                          }}
+                        >
+                          <div className="min-w-0">
+                            <p className={cn(
+                              "text-sm font-semibold truncate",
+                              !book.geminiVoice ? "text-purple-700 dark:text-purple-300" : "text-zinc-700 dark:text-zinc-300"
+                            )}>Global Default ({settings.geminiVoice})</p>
+                            <p className="text-[10px] text-zinc-400">Uses voice from global settings</p>
+                          </div>
+                        </div>
+
                          {GEMINI_VOICES.map(voice => (
                            <div 
                             key={voice}
                             className={cn(
                               "flex items-center justify-between p-3 rounded-2xl cursor-pointer transition-all border group",
-                              (book.geminiVoice === voice || (!book.geminiVoice && settings.geminiVoice === voice))
+                              book.geminiVoice === voice
                                 ? "bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800" 
                                 : "bg-white dark:bg-zinc-800 border-zinc-100 dark:border-zinc-700 hover:border-zinc-200"
                             )}
@@ -2631,6 +2652,27 @@ export default function BookReader() {
                     {/* Browser Voices */}
                     {(book.ttsProvider || 'browser') === 'browser' && (
                       <>
+                        <div 
+                          className={cn(
+                            "flex items-center justify-between p-3 rounded-2xl cursor-pointer transition-all border group mb-2 text-left",
+                            !book.ttsVoice
+                              ? "bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800" 
+                              : "bg-white dark:bg-zinc-800 border-zinc-100 dark:border-zinc-700 hover:border-zinc-200"
+                          )}
+                          onClick={() => {
+                            updateBook(book.id, { ttsVoice: undefined });
+                            setBook({ ...book, ttsVoice: undefined });
+                          }}
+                        >
+                          <div className="min-w-0">
+                            <p className={cn(
+                              "text-sm font-semibold truncate",
+                              !book.ttsVoice ? "text-purple-700 dark:text-purple-300" : "text-zinc-700 dark:text-zinc-300"
+                            )}>Global Default ({settings.ttsVoice || 'System'})</p>
+                            <p className="text-[10px] text-zinc-400">Uses voice from global settings</p>
+                          </div>
+                        </div>
+
                         {availableVoices.filter(v => {
                           const bookLang = (book.language || '').toLowerCase();
                           if (bookLang.includes('hebrew')) return v.lang.startsWith('he');
@@ -2653,8 +2695,8 @@ export default function BookReader() {
                                 <div 
                                   key={voice.name}
                                   className={cn(
-                                    "flex items-center justify-between p-3 rounded-2xl cursor-pointer transition-all border group",
-                                    (book.ttsVoice === voice.name || (!book.ttsVoice && settings.ttsVoice === voice.name))
+                                    "flex items-center justify-between p-3 rounded-2xl cursor-pointer transition-all border group text-left",
+                                    book.ttsVoice === voice.name
                                       ? "bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800" 
                                       : "bg-white dark:bg-zinc-800 border-zinc-100 dark:border-zinc-700 hover:border-zinc-200"
                                   )}
@@ -2704,8 +2746,8 @@ export default function BookReader() {
                             <div 
                               key={voice.name}
                               className={cn(
-                                "flex items-center justify-between p-3 rounded-2xl cursor-pointer transition-all border group",
-                                (book.ttsVoice === voice.name || (!book.ttsVoice && settings.ttsVoice === voice.name))
+                                "flex items-center justify-between p-3 rounded-2xl cursor-pointer transition-all border group text-left",
+                                book.ttsVoice === voice.name
                                   ? "bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800" 
                                   : "bg-white dark:bg-zinc-800 border-zinc-100 dark:border-zinc-700 hover:border-zinc-200"
                               )}
